@@ -1,0 +1,11 @@
+[package]
+name = "loxi-travel"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+loxi-types = { path = "../loxi-types" }
+
+

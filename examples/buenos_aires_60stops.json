@@ -1,0 +1,860 @@
+{
+  "stops": [
+    {
+      "id": "BA_001",
+      "location": {
+        "lat": -34.602812,
+        "lon": -58.384937
+      },
+      "time_window": {
+        "start": 40788,
+        "end": 51588
+      },
+      "service_time": 420,
+      "demand": 3.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_002",
+      "location": {
+        "lat": -34.548352,
+        "lon": -58.390015
+      },
+      "time_window": {
+        "start": 38880,
+        "end": 46080
+      },
+      "service_time": 600,
+      "demand": 4.0,
+      "priority": 3
+    },
+    {
+      "id": "BA_003",
+      "location": {
+        "lat": -34.639147,
+        "lon": -58.337005
+      },
+      "time_window": {
+        "start": 42742,
+        "end": 49942
+      },
+      "service_time": 120,
+      "demand": 15.0,
+      "priority": 3
+    },
+    {
+      "id": "BA_004",
+      "location": {
+        "lat": -34.600294,
+        "lon": -58.367183
+      },
+      "time_window": {
+        "start": 42017,
+        "end": 47417
+      },
+      "service_time": 600,
+      "demand": 1.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_005",
+      "location": {
+        "lat": -34.539922,
+        "lon": -58.403163
+      },
+      "time_window": {
+        "start": 34410,
+        "end": 39810
+      },
+      "service_time": 600,
+      "demand": 18.0,
+      "priority": 2
+    },
+    {
+      "id": "BA_006",
+      "location": {
+        "lat": -34.649563,
+        "lon": -58.31944
+      },
+      "time_window": {
+        "start": 46748,
+        "end": 49448
+      },
+      "service_time": 600,
+      "demand": 15.0,
+      "priority": 2
+    },
+    {
+      "id": "BA_007",
+      "location": {
+        "lat": -34.585211,
+        "lon": -58.372925
+      },
+      "time_window": {
+        "start": 31167,
+        "end": 38367
+      },
+      "service_time": 600,
+      "demand": 18.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_008",
+      "location": {
+        "lat": -34.536676,
+        "lon": -58.3962
+      },
+      "time_window": {
+        "start": 35256,
+        "end": 37956
+      },
+      "service_time": 240,
+      "demand": 4.0,
+      "priority": 2
+    },
+    {
+      "id": "BA_009",
+      "location": {
+        "lat": -34.643736,
+        "lon": -58.311614
+      },
+      "time_window": {
+        "start": 47434,
+        "end": 52834
+      },
+      "service_time": 120,
+      "demand": 18.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_010",
+      "location": {
+        "lat": -34.612092,
+        "lon": -58.372079
+      },
+      "time_window": {
+        "start": 46809,
+        "end": 49509
+      },
+      "service_time": 420,
+      "demand": 20.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_011",
+      "location": {
+        "lat": -34.529763,
+        "lon": -58.413054
+      },
+      "time_window": {
+        "start": 34724,
+        "end": 45524
+      },
+      "service_time": 420,
+      "demand": 15.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_012",
+      "location": {
+        "lat": -34.642687,
+        "lon": -58.349583
+      },
+      "time_window": {
+        "start": 45009,
+        "end": 55809
+      },
+      "service_time": 300,
+      "demand": 1.0,
+      "priority": 2
+    },
+    {
+      "id": "BA_013",
+      "location": {
+        "lat": -34.609321,
+        "lon": -58.373991
+      },
+      "time_window": {
+        "start": 52683,
+        "end": 58083
+      },
+      "service_time": 600,
+      "demand": 15.0,
+      "priority": 2
+    },
+    {
+      "id": "BA_014",
+      "location": {
+        "lat": -34.537913,
+        "lon": -58.411129
+      },
+      "time_window": {
+        "start": 52024,
+        "end": 55624
+      },
+      "service_time": 120,
+      "demand": 3.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_015",
+      "location": {
+        "lat": -34.640901,
+        "lon": -58.343925
+      },
+      "time_window": {
+        "start": 46508,
+        "end": 51908
+      },
+      "service_time": 120,
+      "demand": 15.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_016",
+      "location": {
+        "lat": -34.612347,
+        "lon": -58.38128
+      },
+      "time_window": {
+        "start": 30204,
+        "end": 37404
+      },
+      "service_time": 240,
+      "demand": 3.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_017",
+      "location": {
+        "lat": -34.538343,
+        "lon": -58.407708
+      },
+      "time_window": {
+        "start": 31041,
+        "end": 34641
+      },
+      "service_time": 240,
+      "demand": 20.0,
+      "priority": 3
+    },
+    {
+      "id": "BA_018",
+      "location": {
+        "lat": -34.64795,
+        "lon": -58.341053
+      },
+      "time_window": {
+        "start": 35804,
+        "end": 39404
+      },
+      "service_time": 180,
+      "demand": 12.0,
+      "priority": 2
+    },
+    {
+      "id": "BA_019",
+      "location": {
+        "lat": -34.603041,
+        "lon": -58.383959
+      },
+      "time_window": {
+        "start": 34033,
+        "end": 37633
+      },
+      "service_time": 600,
+      "demand": 7.0,
+      "priority": 2
+    },
+    {
+      "id": "BA_020",
+      "location": {
+        "lat": -34.538725,
+        "lon": -58.389521
+      },
+      "time_window": {
+        "start": 49276,
+        "end": 56476
+      },
+      "service_time": 180,
+      "demand": 12.0,
+      "priority": 2
+    },
+    {
+      "id": "BA_021",
+      "location": {
+        "lat": -34.645794,
+        "lon": -58.338733
+      },
+      "time_window": {
+        "start": 29790,
+        "end": 40590
+      },
+      "service_time": 420,
+      "demand": 4.0,
+      "priority": 3
+    },
+    {
+      "id": "BA_022",
+      "location": {
+        "lat": -34.611826,
+        "lon": -58.373438
+      },
+      "time_window": {
+        "start": 46695,
+        "end": 52095
+      },
+      "service_time": 300,
+      "demand": 7.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_023",
+      "location": {
+        "lat": -34.52701,
+        "lon": -58.385925
+      },
+      "time_window": {
+        "start": 47809,
+        "end": 55009
+      },
+      "service_time": 600,
+      "demand": 10.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_024",
+      "location": {
+        "lat": -34.648753,
+        "lon": -58.340575
+      },
+      "time_window": {
+        "start": 53254,
+        "end": 56854
+      },
+      "service_time": 300,
+      "demand": 2.0,
+      "priority": 2
+    },
+    {
+      "id": "BA_025",
+      "location": {
+        "lat": -34.598998,
+        "lon": -58.394475
+      },
+      "time_window": {
+        "start": 56366,
+        "end": 61766
+      },
+      "service_time": 300,
+      "demand": 15.0,
+      "priority": 2
+    },
+    {
+      "id": "BA_026",
+      "location": {
+        "lat": -34.527368,
+        "lon": -58.381741
+      },
+      "time_window": {
+        "start": 30017,
+        "end": 40817
+      },
+      "service_time": 420,
+      "demand": 10.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_027",
+      "location": {
+        "lat": -34.64812,
+        "lon": -58.347053
+      },
+      "time_window": {
+        "start": 36763,
+        "end": 42163
+      },
+      "service_time": 120,
+      "demand": 12.0,
+      "priority": 3
+    },
+    {
+      "id": "BA_028",
+      "location": {
+        "lat": -34.623077,
+        "lon": -58.384852
+      },
+      "time_window": {
+        "start": 37869,
+        "end": 48669
+      },
+      "service_time": 120,
+      "demand": 20.0,
+      "priority": 3
+    },
+    {
+      "id": "BA_029",
+      "location": {
+        "lat": -34.52569,
+        "lon": -58.401367
+      },
+      "time_window": {
+        "start": 48164,
+        "end": 50864
+      },
+      "service_time": 600,
+      "demand": 15.0,
+      "priority": 2
+    },
+    {
+      "id": "BA_030",
+      "location": {
+        "lat": -34.661849,
+        "lon": -58.345653
+      },
+      "time_window": {
+        "start": 44066,
+        "end": 46766
+      },
+      "service_time": 600,
+      "demand": 18.0,
+      "priority": 2
+    },
+    {
+      "id": "BA_031",
+      "location": {
+        "lat": -34.587176,
+        "lon": -58.374841
+      },
+      "time_window": {
+        "start": 29483,
+        "end": 33083
+      },
+      "service_time": 180,
+      "demand": 3.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_032",
+      "location": {
+        "lat": -34.533627,
+        "lon": -58.395689
+      },
+      "time_window": {
+        "start": 52093,
+        "end": 59293
+      },
+      "service_time": 300,
+      "demand": 10.0,
+      "priority": 3
+    },
+    {
+      "id": "BA_033",
+      "location": {
+        "lat": -34.661424,
+        "lon": -58.339087
+      },
+      "time_window": {
+        "start": 51449,
+        "end": 58649
+      },
+      "service_time": 240,
+      "demand": 20.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_034",
+      "location": {
+        "lat": -34.594451,
+        "lon": -58.407541
+      },
+      "time_window": {
+        "start": 29302,
+        "end": 34702
+      },
+      "service_time": 600,
+      "demand": 20.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_035",
+      "location": {
+        "lat": -34.557423,
+        "lon": -58.413726
+      },
+      "time_window": {
+        "start": 31365,
+        "end": 34965
+      },
+      "service_time": 420,
+      "demand": 20.0,
+      "priority": 2
+    },
+    {
+      "id": "BA_036",
+      "location": {
+        "lat": -34.650601,
+        "lon": -58.341779
+      },
+      "time_window": {
+        "start": 30729,
+        "end": 37929
+      },
+      "service_time": 180,
+      "demand": 20.0,
+      "priority": 2
+    },
+    {
+      "id": "BA_037",
+      "location": {
+        "lat": -34.617285,
+        "lon": -58.38402
+      },
+      "time_window": {
+        "start": 44302,
+        "end": 47902
+      },
+      "service_time": 120,
+      "demand": 2.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_038",
+      "location": {
+        "lat": -34.52977,
+        "lon": -58.395146
+      },
+      "time_window": {
+        "start": 40626,
+        "end": 46026
+      },
+      "service_time": 420,
+      "demand": 10.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_039",
+      "location": {
+        "lat": -34.673694,
+        "lon": -58.319257
+      },
+      "time_window": {
+        "start": 36813,
+        "end": 39513
+      },
+      "service_time": 420,
+      "demand": 15.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_040",
+      "location": {
+        "lat": -34.591443,
+        "lon": -58.362927
+      },
+      "time_window": {
+        "start": 37920,
+        "end": 48720
+      },
+      "service_time": 420,
+      "demand": 5.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_041",
+      "location": {
+        "lat": -34.536119,
+        "lon": -58.421319
+      },
+      "time_window": {
+        "start": 56699,
+        "end": 63899
+      },
+      "service_time": 240,
+      "demand": 12.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_042",
+      "location": {
+        "lat": -34.672153,
+        "lon": -58.325031
+      },
+      "time_window": {
+        "start": 29222,
+        "end": 40022
+      },
+      "service_time": 120,
+      "demand": 2.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_043",
+      "location": {
+        "lat": -34.592691,
+        "lon": -58.392896
+      },
+      "time_window": {
+        "start": 43088,
+        "end": 53888
+      },
+      "service_time": 300,
+      "demand": 10.0,
+      "priority": 2
+    },
+    {
+      "id": "BA_044",
+      "location": {
+        "lat": -34.556751,
+        "lon": -58.401731
+      },
+      "time_window": {
+        "start": 50907,
+        "end": 54507
+      },
+      "service_time": 180,
+      "demand": 2.0,
+      "priority": 2
+    },
+    {
+      "id": "BA_045",
+      "location": {
+        "lat": -34.666137,
+        "lon": -58.312946
+      },
+      "time_window": {
+        "start": 49761,
+        "end": 60561
+      },
+      "service_time": 180,
+      "demand": 10.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_046",
+      "location": {
+        "lat": -34.589451,
+        "lon": -58.369607
+      },
+      "time_window": {
+        "start": 36123,
+        "end": 46923
+      },
+      "service_time": 180,
+      "demand": 10.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_047",
+      "location": {
+        "lat": -34.546695,
+        "lon": -58.383592
+      },
+      "time_window": {
+        "start": 46713,
+        "end": 52113
+      },
+      "service_time": 120,
+      "demand": 20.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_048",
+      "location": {
+        "lat": -34.662439,
+        "lon": -58.311729
+      },
+      "time_window": {
+        "start": 57548,
+        "end": 64748
+      },
+      "service_time": 240,
+      "demand": 7.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_049",
+      "location": {
+        "lat": -34.594841,
+        "lon": -58.382376
+      },
+      "time_window": {
+        "start": 39632,
+        "end": 43232
+      },
+      "service_time": 120,
+      "demand": 15.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_050",
+      "location": {
+        "lat": -34.535828,
+        "lon": -58.419123
+      },
+      "time_window": {
+        "start": 51389,
+        "end": 62189
+      },
+      "service_time": 300,
+      "demand": 1.0,
+      "priority": 2
+    },
+    {
+      "id": "BA_051",
+      "location": {
+        "lat": -34.673695,
+        "lon": -58.325839
+      },
+      "time_window": {
+        "start": 51027,
+        "end": 61827
+      },
+      "service_time": 300,
+      "demand": 12.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_052",
+      "location": {
+        "lat": -34.584098,
+        "lon": -58.381743
+      },
+      "time_window": {
+        "start": 48942,
+        "end": 56142
+      },
+      "service_time": 420,
+      "demand": 15.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_053",
+      "location": {
+        "lat": -34.56012,
+        "lon": -58.382303
+      },
+      "time_window": {
+        "start": 50870,
+        "end": 56270
+      },
+      "service_time": 600,
+      "demand": 7.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_054",
+      "location": {
+        "lat": -34.667912,
+        "lon": -58.347292
+      },
+      "time_window": {
+        "start": 55087,
+        "end": 65887
+      },
+      "service_time": 300,
+      "demand": 3.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_055",
+      "location": {
+        "lat": -34.623633,
+        "lon": -58.370456
+      },
+      "time_window": {
+        "start": 41462,
+        "end": 48662
+      },
+      "service_time": 240,
+      "demand": 2.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_056",
+      "location": {
+        "lat": -34.538966,
+        "lon": -58.41506
+      },
+      "time_window": {
+        "start": 48463,
+        "end": 55663
+      },
+      "service_time": 240,
+      "demand": 15.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_057",
+      "location": {
+        "lat": -34.646731,
+        "lon": -58.34036
+      },
+      "time_window": {
+        "start": 37210,
+        "end": 40810
+      },
+      "service_time": 600,
+      "demand": 2.0,
+      "priority": 1
+    },
+    {
+      "id": "BA_058",
+      "location": {
+        "lat": -34.589948,
+        "lon": -58.40434
+      },
+      "time_window": {
+        "start": 51711,
+        "end": 55311
+      },
+      "service_time": 180,
+      "demand": 1.0,
+      "priority": 3
+    },
+    {
+      "id": "BA_059",
+      "location": {
+        "lat": -34.563609,
+        "lon": -58.41211
+      },
+      "time_window": {
+        "start": 40325,
+        "end": 43025
+      },
+      "service_time": 240,
+      "demand": 4.0,
+      "priority": 3
+    },
+    {
+      "id": "BA_060",
+      "location": {
+        "lat": -34.671182,
+        "lon": -58.330992
+      },
+      "time_window": {
+        "start": 49164,
+        "end": 59964
+      },
+      "service_time": 420,
+      "demand": 10.0,
+      "priority": 3
+    }
+  ],
+  "vehicle": {
+    "capacity": 220.0,
+    "start_location": {
+      "lat": -34.6037,
+      "lon": -58.3816
+    },
+    "end_location": {
+      "lat": -34.6037,
+      "lon": -58.3816
+    },
+    "shift_window": {
+      "start": 28800,
+      "end": 72000
+    },
+    "speed_mps": 8.0
+  }
+}

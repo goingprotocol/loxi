@@ -1,0 +1,44 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/loxi-types",
+    "crates/loxi-cost",
+    "crates/loxi-heuristics",
+    "crates/loxi-travel",
+    "crates/loxi-wasm",
+    "crates/loxi-bench",
+    "crates/loxi-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Loxi Contributors"]
+repository = "https://github.com/goingprotocol/loxi"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rand = "0.8"
+rand_chacha = "0.3"
+thiserror = "1.0"
+
+wasm-bindgen = "0.2"
+console_error_panic_hook = "0.1"
+wasm-bindgen-test = "0.3"
+
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1.0"
+
+criterion = { version = "0.5", features = ["html_reports"] }
+
+approx = "0.5"
+
+[profile.release]
+lto = true
+opt-level = 3
+codegen-units = 1
+
+[profile.bench]
+inherits = "release"
+

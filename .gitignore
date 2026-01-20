@@ -1,0 +1,30 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+# Cargo.lock is typically committed for applications/CLIs to ensure reproducible builds.
+
+# WASM
+/crates/loxi-wasm/pkg/
+/wasm-pack.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+/dist/
+/build/
+
+# Test / bench outputs (local convenience)
+/bench-output.txt
+/test-output.txt
+/benchmark-results/
+

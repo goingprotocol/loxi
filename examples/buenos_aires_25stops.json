@@ -1,0 +1,212 @@
+{
+  "stops": [
+    {
+      "id": "stop_01_palermo",
+      "location": { "lat": -34.5875, "lon": -58.4258 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 300,
+      "demand": 8.0,
+      "priority": 2
+    },
+    {
+      "id": "stop_02_recoleta",
+      "location": { "lat": -34.5889, "lon": -58.3928 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 240,
+      "demand": 6.0,
+      "priority": 2
+    },
+    {
+      "id": "stop_03_microcentro",
+      "location": { "lat": -34.6037, "lon": -58.3816 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 360,
+      "demand": 9.0,
+      "priority": 3
+    },
+    {
+      "id": "stop_04_san_telmo",
+      "location": { "lat": -34.6197, "lon": -58.3730 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 300,
+      "demand": 7.0,
+      "priority": 2
+    },
+    {
+      "id": "stop_05_la_boca",
+      "location": { "lat": -34.6345, "lon": -58.3636 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 420,
+      "demand": 11.0,
+      "priority": 2
+    },
+    {
+      "id": "stop_06_puerto_madero",
+      "location": { "lat": -34.6081, "lon": -58.3629 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 300,
+      "demand": 5.0,
+      "priority": 1
+    },
+    {
+      "id": "stop_07_belgrano",
+      "location": { "lat": -34.5627, "lon": -58.4563 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 240,
+      "demand": 6.0,
+      "priority": 2
+    },
+    {
+      "id": "stop_08_nunez",
+      "location": { "lat": -34.5454, "lon": -58.4680 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 240,
+      "demand": 4.0,
+      "priority": 1
+    },
+    {
+      "id": "stop_09_colegiales",
+      "location": { "lat": -34.5736, "lon": -58.4569 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 240,
+      "demand": 5.0,
+      "priority": 1
+    },
+    {
+      "id": "stop_10_chacarita",
+      "location": { "lat": -34.5920, "lon": -58.4572 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 240,
+      "demand": 6.0,
+      "priority": 1
+    },
+    {
+      "id": "stop_11_villa_crespo",
+      "location": { "lat": -34.5997, "lon": -58.4417 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 300,
+      "demand": 7.0,
+      "priority": 2
+    },
+    {
+      "id": "stop_12_almagro",
+      "location": { "lat": -34.6061, "lon": -58.4201 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 300,
+      "demand": 6.0,
+      "priority": 1
+    },
+    {
+      "id": "stop_13_balvanera",
+      "location": { "lat": -34.6095, "lon": -58.4028 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 300,
+      "demand": 8.0,
+      "priority": 2
+    },
+    {
+      "id": "stop_14_caballito",
+      "location": { "lat": -34.6190, "lon": -58.4421 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 240,
+      "demand": 7.0,
+      "priority": 1
+    },
+    {
+      "id": "stop_15_flores",
+      "location": { "lat": -34.6316, "lon": -58.4639 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 300,
+      "demand": 10.0,
+      "priority": 2
+    },
+    {
+      "id": "stop_16_floresta",
+      "location": { "lat": -34.6306, "lon": -58.4876 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 240,
+      "demand": 6.0,
+      "priority": 1
+    },
+    {
+      "id": "stop_17_velez_sarsfield",
+      "location": { "lat": -34.6372, "lon": -58.5017 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 240,
+      "demand": 5.0,
+      "priority": 1
+    },
+    {
+      "id": "stop_18_liniers",
+      "location": { "lat": -34.6365, "lon": -58.5211 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 300,
+      "demand": 9.0,
+      "priority": 2
+    },
+    {
+      "id": "stop_19_matonza",
+      "location": { "lat": -34.6395, "lon": -58.5587 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 300,
+      "demand": 12.0,
+      "priority": 2
+    },
+    {
+      "id": "stop_20_san_justo",
+      "location": { "lat": -34.6850, "lon": -58.5585 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 360,
+      "demand": 10.0,
+      "priority": 2
+    },
+    {
+      "id": "stop_21_avellaneda",
+      "location": { "lat": -34.6630, "lon": -58.3659 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 300,
+      "demand": 8.0,
+      "priority": 2
+    },
+    {
+      "id": "stop_22_lanus",
+      "location": { "lat": -34.7024, "lon": -58.3908 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 300,
+      "demand": 9.0,
+      "priority": 2
+    },
+    {
+      "id": "stop_23_lomas_de_zamora",
+      "location": { "lat": -34.7620, "lon": -58.4060 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 360,
+      "demand": 12.0,
+      "priority": 2
+    },
+    {
+      "id": "stop_24_quilmes",
+      "location": { "lat": -34.7207, "lon": -58.2546 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 360,
+      "demand": 11.0,
+      "priority": 2
+    },
+    {
+      "id": "stop_25_vicente_lopez",
+      "location": { "lat": -34.5293, "lon": -58.4740 },
+      "time_window": { "start": 0, "end": 86400 },
+      "service_time": 240,
+      "demand": 6.0,
+      "priority": 1
+    }
+  ],
+  "vehicle": {
+    "capacity": 400.0,
+    "start_location": { "lat": -34.6037, "lon": -58.3816 },
+    "end_location": { "lat": -34.6037, "lon": -58.3816 },
+    "shift_window": { "start": 0, "end": 86400 },
+    "speed_mps": 12.0
+  }
+}
+

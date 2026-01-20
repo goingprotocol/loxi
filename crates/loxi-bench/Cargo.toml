@@ -1,0 +1,21 @@
+[package]
+name = "loxi-bench"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Benchmark harness and test datasets for Loxi"
+
+[dependencies]
+loxi-types = { path = "../loxi-types" }
+loxi-heuristics = { path = "../loxi-heuristics" }
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "routing_bench"
+harness = false
+

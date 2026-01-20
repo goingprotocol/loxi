@@ -1,0 +1,22 @@
+[package]
+name = "loxi-heuristics"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "CPU-based heuristic solvers for Loxi"
+
+[dependencies]
+loxi-types = { path = "../loxi-types" }
+loxi-cost = { path = "../loxi-cost" }
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "solver_bench"
+harness = false
+

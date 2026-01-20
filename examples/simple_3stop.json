@@ -1,0 +1,63 @@
+{
+  "stops": [
+    {
+      "id": "stop_a",
+      "location": {
+        "lat": 40.7128,
+        "lon": -74.0060
+      },
+      "time_window": {
+        "start": 28800,
+        "end": 32400
+      },
+      "service_time": 300,
+      "demand": 10.0,
+      "priority": 2
+    },
+    {
+      "id": "stop_b",
+      "location": {
+        "lat": 40.7580,
+        "lon": -73.9855
+      },
+      "time_window": {
+        "start": 32400,
+        "end": 36000
+      },
+      "service_time": 600,
+      "demand": 15.0,
+      "priority": 1
+    },
+    {
+      "id": "stop_c",
+      "location": {
+        "lat": 40.6782,
+        "lon": -73.9442
+      },
+      "time_window": {
+        "start": 36000,
+        "end": 39600
+      },
+      "service_time": 450,
+      "demand": 8.0,
+      "priority": 1
+    }
+  ],
+  "vehicle": {
+    "capacity": 100.0,
+    "start_location": {
+      "lat": 40.7128,
+      "lon": -74.0060
+    },
+    "end_location": {
+      "lat": 40.7128,
+      "lon": -74.0060
+    },
+    "shift_window": {
+      "start": 28800,
+      "end": 64800
+    },
+    "speed_mps": 10.0
+  }
+}
+
