@@ -19,14 +19,26 @@ echo "Copying examples/ -> dist/examples/"
 cp -R "${ROOT_DIR}/examples/." "${DIST_DIR}/examples/"
 
 echo "Building WASM (best effort)..."
-if command -v wasm-pack >/dev/null 2>&1; then
-  pushd "${ROOT_DIR}/crates/loxi-wasm" >/dev/null
-  wasm-pack build --target web --release
-  popd >/dev/null
-else
-  echo "WARN: wasm-pack not found. Will use existing ${WASM_PKG_DIR} if present."
-  echo "      (Cloudflare Pages builds should install wasm-pack and run this script.)"
+if ! command -v wasm-pack >/dev/null 2>&1; then
+  echo "WARN: wasm-pack not found."
+  echo "      Attempting to install wasm-pack via cargo (recommended for Cloudflare Pages)..."
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "ERROR: cargo not found, cannot install wasm-pack."
+    exit 1
+  fi
+
+  # Ensure the wasm32 target is available (rustup is present on most CI images).
+  if command -v rustup >/dev/null 2>&1; then
+    rustup target add wasm32-unknown-unknown || true
+  fi
+
+  # --locked for reproducibility and to avoid selecting newer dependency trees unexpectedly.
+  cargo install wasm-pack --locked
 fi
+
+pushd "${ROOT_DIR}/crates/loxi-wasm" >/dev/null
+wasm-pack build --target web --release
+popd >/dev/null
 
 if [[ ! -f "${WASM_PKG_DIR}/loxi_wasm.js" || ! -f "${WASM_PKG_DIR}/loxi_wasm_bg.wasm" ]]; then
   echo "ERROR: Missing wasm-pack output in ${WASM_PKG_DIR}."
