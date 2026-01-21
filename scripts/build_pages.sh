@@ -23,8 +23,26 @@ if ! command -v wasm-pack >/dev/null 2>&1; then
   echo "WARN: wasm-pack not found."
   echo "      Attempting to install wasm-pack via cargo (recommended for Cloudflare Pages)..."
   if ! command -v cargo >/dev/null 2>&1; then
-    echo "ERROR: cargo not found, cannot install wasm-pack."
-    exit 1
+    echo "WARN: cargo not found. Attempting to install a minimal Rust toolchain via rustup..."
+    if ! command -v curl >/dev/null 2>&1; then
+      echo "ERROR: curl not found, cannot install rustup."
+      echo "       On Cloudflare Pages: ensure your build image supports curl, or prebuild WASM artifacts."
+      exit 1
+    fi
+
+    # Install rustup + stable toolchain non-interactively.
+    # shellcheck disable=SC1091
+    curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
+    if [[ -f "${HOME}/.cargo/env" ]]; then
+      # shellcheck disable=SC1091
+      source "${HOME}/.cargo/env"
+    fi
+
+    if ! command -v cargo >/dev/null 2>&1; then
+      echo "ERROR: cargo still not available after rustup install."
+      echo "       If this is Cloudflare Pages, consider using a build image that includes Rust, or prebuild WASM artifacts."
+      exit 1
+    fi
   fi
 
   # Ensure the wasm32 target is available (rustup is present on most CI images).
