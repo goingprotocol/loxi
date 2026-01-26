@@ -1,0 +1,30 @@
+{
+    "name": "@loxi/node-sdk",
+    "version": "0.1.0",
+    "description": "Loxi Protocol Node SDK (Universal)",
+    "main": "dist/index.js",
+    "module": "dist/index.mjs",
+    "types": "dist/index.d.ts",
+    "scripts": {
+        "build": "tsup",
+        "test": "node test_probe.js"
+    },
+    "keywords": [
+        "loxi",
+        "node",
+        "sdk",
+        "wasm"
+    ],
+    "author": "Loxi Protocol",
+    "license": "BSL-1.1",
+    "devDependencies": {
+        "@types/node": "^20.0.0",
+        "@types/ws": "^8.18.1",
+        "tsup": "^8.0.0",
+        "typescript": "^5.0.0"
+    },
+    "dependencies": {
+        "isomorphic-ws": "^5.0.0",
+        "ws": "^8.16.0"
+    }
+}

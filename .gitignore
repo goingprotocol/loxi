@@ -23,8 +23,16 @@ Thumbs.db
 /dist/
 /build/
 
+# Valhalla Data
+scripts/valhalla_data/
+*.osm.pbf
+
+# Loxi Protocol Artifacts
+protocol/apps/worker-web/public/artifacts/
+
 # Test / bench outputs (local convenience)
 /bench-output.txt
 /test-output.txt
 /benchmark-results/
 
+node_modules

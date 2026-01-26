@@ -1,0 +1,16 @@
+[package]
+name = "loxi-partition-artifact"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+h3o = "0.3" # Pure Rust H3 implementation, critical for WASM
+console_error_panic_hook = "0.1"
+loxi-wasm-sdk = { path = "../../../loxi-wasm-sdk" }
+loxi-logistics = { path = "../.." }

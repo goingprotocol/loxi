@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Loxi Node (Browser Miner)</title>
+    <style>
+        body {
+            font-family: monospace;
+            background: #1a1a1a;
+            color: #0f0;
+            padding: 20px;
+        }
+
+        #log {
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Loxi Node: Browser Miner</h1>
+    <div id="status">Status: Idle</div>
+    <div id="log"></div>
+
+    <script type="module">
+        import { LoxiNode } from '../../sdk/node/dist/index.mjs';
+
+        // Override console.log to show on screen
+        const oldLog = console.log;
+        const oldError = console.error;
+        const logDiv = document.getElementById('log');
+
+        function print(type, args) {
+            const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+            logDiv.innerText += `[${type}] ${msg}\n`;
+            if (type === 'ERROR') logDiv.style.color = '#f55';
+        }
+
+        console.log = (...args) => { oldLog(...args); print('INFO', args); };
+        console.error = (...args) => { oldError(...args); print('ERROR', args); };
+
+        async function startMiner() {
+            try {
+                document.getElementById('status').innerText = 'Status: Connecting...';
+
+                // Connect to local Orchestrator (Dynamic Host)
+                const wsHost = window.location.hostname;
+                const node = new LoxiNode(`ws://${wsHost}:3005`, 'browser_node_' + Math.floor(Math.random() * 1000));
+
+                await node.start();
+
+                document.getElementById('status').innerText = 'Status: Connected & Waiting for Tasks';
+            } catch (e) {
+                console.error("FATAL:", e);
+                document.getElementById('status').innerText = 'Status: Error';
+            }
+        }
+
+        startMiner();
+    </script>
+</body>
+
+</html>

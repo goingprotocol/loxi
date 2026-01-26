@@ -1,0 +1,9 @@
+[package]
+name = "loxi-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
