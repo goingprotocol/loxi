@@ -1,5 +1,4 @@
 
-import { loadValhalla } from './ValhallaLoader';
 
 /**
  * Calls the Valhalla WASM bridge to generate a matrix or other response.
@@ -72,7 +71,7 @@ export const callValhallaBridge = async (jsonInput: string): Promise<string> => 
  * This ensures that after the calculation, the worker is terminated and ALL memory is freed.
  * This is the silver bullet for "std::bad_alloc" and "exceeded max iterations".
  */
-export const runValhallaWorker = (jsonInput: string): Promise<any> => {
+export const runValhallaWorker = (jsonInput: string, type: 'CALCULATE_MATRIX' | 'CALCULATE_ROUTE' = 'CALCULATE_MATRIX'): Promise<any> => {
     return new Promise((resolve, reject) => {
         const worker = new Worker('/valhalla_worker_v2.js');
 
@@ -80,12 +79,16 @@ export const runValhallaWorker = (jsonInput: string): Promise<any> => {
         let parsed: any = {};
         try {
             parsed = JSON.parse(jsonInput);
-            // ... (Sanitización igual que arriba) ...
-            if (parsed.locations && !parsed.sources) {
-                parsed.sources = parsed.locations;
-                parsed.targets = parsed.locations;
-                delete parsed.locations;
+
+            // Only sanitize for MATRIX if it doesn't have locations (Route usually has locations)
+            if (type === 'CALCULATE_MATRIX') {
+                if (parsed.locations && !parsed.sources) {
+                    parsed.sources = parsed.locations;
+                    parsed.targets = parsed.locations;
+                    delete parsed.locations;
+                }
             }
+
             if (!parsed.costing) parsed.costing = "auto";
 
             // ✅ CORRECCIÓN CRÍTICA: NO SOBREESCRIBIR LÍMITES
@@ -94,33 +97,31 @@ export const runValhallaWorker = (jsonInput: string): Promise<any> => {
         } catch (e) { reject(e); return; }
 
         const finalInput = JSON.stringify(parsed);
-        console.log("👷 [BRIDGE -> WORKER] Sending Task...");
 
         worker.onmessage = (e) => {
-            const { type, result, error } = e.data;
-            if (type === 'SUCCESS') {
-                console.log("👷 [WORKER] Success! Terminating thread.");
+            const { type: resType, result, error } = e.data;
+            if (resType === 'SUCCESS') {
                 worker.terminate(); // KILL IT WITH FIRE (clean memory)
                 try {
                     resolve(JSON.parse(result));
                 } catch (parseErr) {
                     resolve(result); // Return raw if not JSON
                 }
-            } else if (type === 'ERROR') {
-                console.error("👷 [WORKER] Error:", error);
+            } else if (resType === 'ERROR') {
+                console.error(`👷 [WORKER] ${type} Error:`, error);
                 worker.terminate();
                 reject(error);
             }
         };
 
         worker.onerror = (err) => {
-            console.error("👷 [WORKER] Fatal Error:", err);
+            console.error(`👷 [WORKER] Fatal Error (${type}):`, err);
             worker.terminate();
             reject(err);
         };
 
         worker.postMessage({
-            type: 'CALCULATE_MATRIX',
+            type: type,
             payload: finalInput
         });
     });

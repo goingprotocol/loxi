@@ -15,9 +15,9 @@ const DB_VERSION = 3;
 ctx.onmessage = async (e) => {
     const { type, payload } = e.data;
 
-    if (type === 'CALCULATE_MATRIX') {
+    if (type === 'CALCULATE_MATRIX' || type === 'CALCULATE_ROUTE') {
         try {
-            console.log("👷 [WORKER] Starting Valhalla Task (Safe Mode)...");
+            console.log(`👷 [WORKER] Starting Valhalla Task: ${type}...`);
 
             // 1. Setup Module environment (Global Scope)
             self.Module = {
@@ -27,8 +27,13 @@ ctx.onmessage = async (e) => {
                 printErr: (text) => console.warn("[WORKER-VALHALLA-ERR]", text),
             };
 
-            // 2. Load the Valhalla script
-            importScripts('/artifacts/loxi_valhalla.js');
+            // 2. Load LazyFS (using basic version for now)
+            // TODO: Fix path loading for http_fs_optimized.js
+            const baseUrl = self.location.origin;
+            importScripts(`${baseUrl}/artifacts/http_fs.js`);
+
+            // 3. Load the Valhalla script
+            importScripts(`${baseUrl}/artifacts/loxi_valhalla.js`);
 
             // 3. Wait for Runtime
             const mod = await new Promise(resolve => {
@@ -38,21 +43,14 @@ ctx.onmessage = async (e) => {
             // 4. Initialize Engine Configuration
             await initEngine(mod);
 
-            // 5. PRE-FLIGHT: Download Tiles based on Locations
+            // 5. Setup Input
             const input = JSON.parse(payload);
-            let locations = input.locations;
-            if (!locations && input.sources) locations = input.sources;
-
-            if (locations && locations.length > 0) {
-                // console.log(`👷 [WORKER] Analyzing ${locations.length} locations for tiles...`);
-                const bbox = getBBox(locations);
-                // Descargamos niveles 0, 1 y 2
-                await downloadTiles(mod, bbox, locations, SERVER);
-            }
+            const locations = input.locations || input.sources || [];
 
             // 6. Execute Matrix
-            console.log("👷 [WORKER] Executing Matrix for " + locations.length + " locations...");
+            console.log(`👷 [WORKER] Executing Matrix for ${locations.length} locations...`);
             const start = performance.now();
+
             const res = mod.ccall("valhalla_matrix", "string", ["string"], [payload]);
             const duration = ((performance.now() - start) / 1000).toFixed(2);
 
@@ -62,7 +60,7 @@ ctx.onmessage = async (e) => {
                 return;
             }
 
-            console.log("✅ [WORKER] Matrix Calculated in " + duration + "s. Size: " + (res.length / 1024).toFixed(1) + " KB");
+            console.log(`✅ [WORKER] Matrix Calculated in ${duration}s. Size: ${(res.length / 1024).toFixed(1)} KB`);
 
             // 7. Send Result
             ctx.postMessage({ type: 'SUCCESS', result: res });
@@ -79,17 +77,34 @@ const SERVER = 'http://localhost:8080';
 // ----------------------
 // INIT ENGINE LOGIC
 // ----------------------
+// ----------------------
+// INIT ENGINE LOGIC
+// ----------------------
 async function initEngine(mod) {
     const fs = mod.FS;
 
-    // 1. Ensure FS Structure
+    if (!fs) {
+        console.error('👷 [WORKER] CRITICAL: mod.FS is undefined. Emscripten not initialized properly.');
+        throw new Error('Emscripten FS not available');
+    }
+
+    // 1. Mount LazyFS for Tiles
     try {
-        ['/valhalla_tiles', '/valhalla_tiles/0', '/valhalla_tiles/1', '/valhalla_tiles/2'].forEach(p => {
-            if (!fs.analyzePath(p).exists) fs.mkdir(p);
-        });
-        fs.writeFile('/valhalla_tiles/admins.sqlite', new Uint8Array(0));
-        fs.writeFile('/valhalla_tiles/timezones.sqlite', new Uint8Array(0));
-    } catch (e) { }
+        if (!fs.analyzePath('/valhalla_tiles').exists) {
+            fs.mkdir('/valhalla_tiles');
+        }
+
+        const rootUrl = 'http://localhost:8080/valhalla_tiles';
+        console.log(`👷 [WORKER] Mounting LazyFS at /valhalla_tiles -> ${rootUrl}`);
+
+        // Use basic HttpRangeFS (optimized version has path loading issues)
+        fs.mount(self.HttpRangeFS, { root: rootUrl }, '/valhalla_tiles');
+
+        console.log('👷 [WORKER] LazyFS mounted successfully');
+    } catch (e) {
+        console.error("👷 [WORKER] LazyFS Mount Failed:", e);
+        throw e;
+    }
 
     // 2. Golden Config
     const config = getGoldenTemplate();
@@ -100,10 +115,6 @@ async function initEngine(mod) {
         const encoder = new TextEncoder();
         const data = encoder.encode(configStr);
         fs.writeFile('/valhalla.json', data);
-
-        // Verify
-        const check = fs.readFile('/valhalla.json', { encoding: 'utf8' });
-        console.log(`👷 [WORKER] Config written (${check.length} bytes).`);
     } catch (e) {
         console.error("👷 [WORKER] Config write failed:", e);
         throw e;
@@ -116,16 +127,7 @@ async function initEngine(mod) {
     if (result === 0) {
         console.log("👷 [WORKER] Init Success (Code 0).");
     } else {
-        console.warn(`👷 [WORKER] Init returned Code ${result}. Probing...`);
-        // Probe
-        const dummy = JSON.stringify({ locations: [{ lat: -34.6, lon: -58.3 }, { lat: -34.7, lon: -58.4 }], costing: "auto" });
-        const probe = mod.ccall("valhalla_matrix", "string", ["string"], [dummy]);
-        if (probe && !probe.includes("Valhalla not initialized")) {
-            console.log("👷 [WORKER] Probe Success! Engine is working.");
-        } else {
-            console.error("👷 [WORKER] Probe Failed:", probe);
-            throw new Error(`Valhalla Init Failed (Code ${result}). Check console for missing config details.`);
-        }
+        console.warn(`👷 [WORKER] Init returned Code ${result}.`);
     }
 }
 

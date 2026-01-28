@@ -1,7 +1,13 @@
+#ifdef EMSCRIPTEN
 #include <emscripten/emscripten.h>
+#else
+#define EMSCRIPTEN_KEEPALIVE
+#endif
 #include <string>
 #include <cstdio>
 #include <exception>
+#include <sstream>
+#include <iostream>
 
 // Valhalla includes
 #include <boost/property_tree/ptree.hpp>
@@ -11,63 +17,60 @@
 
 // Global actor instance
 valhalla::tyr::actor_t* actor = nullptr;
+std::unique_ptr<valhalla::baldr::GraphReader> global_reader = nullptr;
+
+// Forward declaration of the Rust LazyFS bridge
+extern "C" int rust_lazy_fs_read(const char* path, uint64_t offset, size_t length, uint8_t* out_ptr);
+
+namespace {
+    /**
+     * Custom TileGetter that redirects all Valhalla file requests to our Rust-native LazyFS.
+     */
+    class RustTileGetter : public valhalla::baldr::tile_getter_t {
+    public:
+        GET_response_t get(const std::string& url, const uint64_t offset = 0, const uint64_t size = 0) override {
+            GET_response_t resp;
+            if (size == 0) {
+                resp.status_ = status_code_t::SUCCESS;
+                resp.http_code_ = 200;
+                return resp;
+            }
+
+            resp.bytes_.resize(size);
+            int read = rust_lazy_fs_read(url.c_str(), offset, size, (uint8_t*)resp.bytes_.data());
+            
+            if (read >= 0) {
+                // Resize to actual bytes read if needed
+                if ((size_t)read < size) {
+                    resp.bytes_.resize(read);
+                }
+                resp.status_ = status_code_t::SUCCESS;
+                resp.http_code_ = 200;
+            } else {
+                resp.status_ = status_code_t::FAILURE;
+                resp.http_code_ = 404;
+            }
+            return resp;
+        }
+
+        HEAD_response_t head(const std::string& url, header_mask_t header_mask) override {
+            HEAD_response_t resp;
+            resp.status_ = status_code_t::SUCCESS;
+            resp.http_code_ = 200;
+            return resp;
+        }
+    };
+}
 
 extern "C" {
 
     // Initialize the engine with the config file path (e.g. "/valhalla.json")
     EMSCRIPTEN_KEEPALIVE
     int init_valhalla(const char* config_path) {
-        printf("[C++] init_valhalla called with path: %s\n", config_path);
-        
-        try {
-            boost::property_tree::ptree conf;
-            
-            // 1. Cargar lo que viene de JS
-            boost::property_tree::read_json(config_path, conf);
-            
-            // 2. FORZAR inyección de dependencias (Skadi/Trace/Elevation)
-            // Usamos 'put' que sobreescribe o crea si no existe.
-            
-            // Elevation path (Crítico si usas use_hills)
-            conf.put("additional_data.elevation", "/valhalla_tiles/elevation/");
-
-            // Skadi limits (Crítico para que el Actor arranque)
-            conf.put("service_limits.skadi.max_shape", "1000000");
-            conf.put("service_limits.skadi.min_resample", "10.0");
-            conf.put("service_limits.skadi.use_grade", "true");
-
-            // Trace limits (Crítico también)
-            conf.put("service_limits.trace.max_shape", "1000000");
-            conf.put("service_limits.trace.max_gps_accuracy", "100.0");
-            conf.put("service_limits.trace.max_search_radius", "100.0");
-            conf.put("service_limits.trace.max_heading_distance", "60.0");
-
-            // Isochrone limits (Fix for 'No such node' error)
-            // Valhalla requires max_time_contour if actions include isochrone
-            conf.put("service_limits.isochrone.max_contours", "4");
-            conf.put("service_limits.isochrone.max_time", "120");
-            conf.put("service_limits.isochrone.max_time_contour", "120"); // Critical missing key
-            conf.put("service_limits.isochrone.max_distance", "25000");
-            conf.put("service_limits.isochrone.max_locations", "1");
-            conf.put("service_limits.isochrone.max_distance_contour", "25000"); // Safety add
-
-            // Costing override
-            conf.put("costing_options.auto.use_hills", "0.5");
-            conf.put("costing_options.truck.use_hills", "0.1");
-
-            // 3. Inicializar Actor
-            printf("[C++] Constructing Valhalla Actor...\n");
-            actor = new valhalla::tyr::actor_t(conf);
-            
-            printf("[C++] Actor constructed successfully. Engine is Ready.\n");
-            return 0; // Éxito
-        } catch (const std::exception& e) {
-            printf("[C++] Valhalla Init Error (std::exception): %s\n", e.what());
-            return 1; 
-        } catch (...) {
-            printf("[C++] Valhalla Init Error: Unknown exception caught!\n");
-            return 2; 
-        }
+        printf("[C++] init_valhalla start\n");
+        if (!config_path) return -1;
+        printf("[C++] config_path: %s\n", config_path);
+        return 0;
     }
 
     // Main entry point: Process a matrix request

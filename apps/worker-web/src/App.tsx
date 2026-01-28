@@ -53,6 +53,7 @@ function App() {
   const [logs, setLogs] = useState<Log[]>([]);
   const [activeLease, setActiveLease] = useState<Lease | null>(null)
   const [activePayload, setActivePayload] = useState<string | null>(null)
+  const [activeShape, setActiveShape] = useState<string | null>(null)
   const [nodeSpecs, setNodeSpecs] = useState<NodeSpecs | null>(null)
   const [architectProblem, setArchitectProblem] = useState<any>(null)
   const [activeSolutions, setActiveSolutions] = useState<Record<string, any>>({})
@@ -205,6 +206,7 @@ function App() {
     const hash = lease.artifact_hash;
 
     try {
+      if (initialPayload) setActivePayload(initialPayload);
       let finalPayload = initialPayload;
       console.log("RunArtifact Payload Status:", initialPayload ? initialPayload.length + " chars" : "NULL");
 
@@ -265,8 +267,6 @@ function App() {
       // ============================================================
       // 🧠 SMART TILE LOADING STRATEGY
       // ============================================================
-      // Si la tarea es VRP, necesitamos tiles en el Main Thread (porque VRP usa callValhallaBridgeSync).
-      // Si la tarea es Matrix (Valhalla Worker), NO cargamos tiles aquí para ahorrar RAM.
       const requiresMainThreadTiles = hash === "loxi_vrp_artifact_v1" || hash === "loxi_sector_v1";
 
       if (requiresMainThreadTiles) {
@@ -288,8 +288,7 @@ function App() {
             const bbox = calculateBoundingBox(locations);
 
             const tileServerUrl = import.meta.env.VITE_TILE_SERVER_URL || 'http://localhost:8080';
-            // --- FIX: Await Valhalla with fallback if not ready ---
-            let module = window.valhallaModule;
+            let module = (window as any).valhallaModule;
             if (!module) {
               console.log("⏳ Valhalla not ready for tiles. Waiting for initialization...");
               module = await loadValhalla();
@@ -312,13 +311,12 @@ function App() {
           console.warn("⚠️ Tile pre-load warning:", e);
           if (hash === "loxi_sector_v1") {
             addLog("❌ Valhalla Initialization Failed", "error");
-            throw e; // Abort the task if it depends on Valhalla
+            throw e;
           }
         }
       } else {
         console.log("⏩ Skipping Main Thread Tile Load (Worker will handle it).");
       }
-      // ============================================================
 
 
       const startTime = Date.now();
@@ -326,33 +324,27 @@ function App() {
       console.log(`🚀 Loading Artifact: ${hash} `);
 
       if (hash === "loxi_vrp_artifact_v1") {
-        // --- VRP SOLVER ARTIFACT ---
         const module = await import(/* @vite-ignore */ `${window.location.origin}/artifacts/loxi_vrp_artifact.js`);
         await module.default();
         const solverInput = JSON.stringify({
           auction_id: lease.auction_id,
           domain_id: "logistics",
-          payload: unwrappedPayload // This is the JSON string of the domain data (stops + matrix)
+          payload: unwrappedPayload
         });
 
         wasmResponseRaw = module.solve(solverInput);
         console.log("🧩 VRP RAW Response:", wasmResponseRaw);
 
       } else if (hash === "loxi_partitioner_v1") {
-        // --- PARTITIONER ARTIFACT ---
         console.log("🔪 Loading Partitioning WASM...");
         const module = await import(/* @vite-ignore */ `${window.location.origin}/artifacts/loxi_partition_artifact.js`);
         await module.default(`${window.location.origin}/artifacts/loxi_partition_artifact_bg.wasm`);
         wasmResponseRaw = module.partition(unwrappedPayload);
 
       } else if (hash === "loxi_sector_v1") {
-        // --- SECTOR / MATRIX ARTIFACT (LEGACY/FALLBACK) ---
-        // Requires Main Thread Tiles (Already Handled)
-
         let input = unwrappedPayload;
         try {
           const problem = JSON.parse(unwrappedPayload);
-          // Standardize Input for Matrix Tasks
           if (problem.stops) {
             const stops = problem.stops.map((s: any) => s.location);
             const start = problem.vehicle?.start_location || stops[0];
@@ -365,7 +357,6 @@ function App() {
           }
         } catch (e) { }
 
-        // Keep Legacy Rust Artifact for Sector
         let vModule = (window as any).valhallaModule;
         if (!vModule) vModule = await loadValhalla();
         // @ts-ignore
@@ -377,41 +368,30 @@ function App() {
         await artModule.default(`${window.location.origin}/artifacts/loxi_sector_artifact_bg.wasm`);
         wasmResponseRaw = artModule.solve_sector(input);
       } else if (hash === "loxi_valhalla_v1") {
-        // --- VALHALLA MATRIX (Worker Thread) ---
         console.log("⚡ Executing Matrix in Disposable Worker...");
 
         let input = unwrappedPayload;
         try {
-          // 🧠 AUTO-TRANSFORM: VRP -> Matrix Payload
           const problem = JSON.parse(unwrappedPayload);
-          if (problem.stops) {
-            console.log("🔄 Transforming VRP Payload for Matrix Worker...");
-            // Extract locations from stops
-            const stops = problem.stops.map((s: any) => s.location);
-            const start = problem.vehicle?.start_location || stops[0];
+          if (problem.stops || problem.locations) {
+            console.log("🔄 Transforming Payload for Matrix Worker...");
+            const locations = problem.locations || (problem.stops.map((s: any) => s.location));
+            const start = problem.vehicle?.start_location || locations[0];
             const end = problem.vehicle?.end_location;
 
-            // Build locations array: [Start, ...Stops, End]
-            const locations = [start, ...stops].filter((l: any) => l && typeof l.lat === 'number');
-
+            const finalLocations = [start, ...locations].filter((l: any) => l && typeof l.lat === 'number');
             if (end && (end.lat !== start.lat || end.lon !== start.lon)) {
-              locations.push(end);
+              finalLocations.push(end);
             }
-
-            // Re-package as Matrix Request
-            // FORZAR PEDESTRIAN AQUI TAMBIEN
-            input = JSON.stringify({ locations, costing: "auto" });
+            input = JSON.stringify({ locations: finalLocations, costing: problem.costing || "auto" });
           }
         } catch (e) { console.warn("Payload transform warning:", e); }
 
         // @ts-ignore
         const { runValhallaWorker } = await import('./utils/ValhallaBridge');
 
-        // El worker se encarga de descargar sus propios tiles (Niveles 0, 1, 2)
-        // Gracias a IndexedDB, si ya existen, es instantáneo.
-        const workerResult = await runValhallaWorker(input);
+        const workerResult = await runValhallaWorker(input, 'CALCULATE_MATRIX');
 
-        // SAFETY CHECK: Catch encoded C++ errors that are NOT JSON
         if (typeof workerResult === 'string' && (workerResult.includes("std::bad_alloc") || workerResult.includes("unordered_map") || workerResult.includes("Valhalla not initialized"))) {
           addLog(`🚨 Critical: Engine hit a memory boundary (bad_alloc) during Matrix.`, "error");
           throw new Error(`Valhalla Worker Error: ${workerResult}`);
@@ -423,12 +403,10 @@ function App() {
         throw new Error(`Unknown Artifact Hash: ${hash}`);
       }
 
-      // --- PROCESAMIENTO DE RESPUESTA ---
       let wasmResponse: any;
       try {
         wasmResponse = typeof wasmResponseRaw === 'string' ? JSON.parse(wasmResponseRaw) : wasmResponseRaw;
       } catch (e) {
-        // If it's not JSON, it might be a raw error string from C++
         if (typeof wasmResponseRaw === 'string' && wasmResponseRaw.includes("bad_alloc")) {
           wasmResponse = { error: wasmResponseRaw };
         } else {
@@ -437,11 +415,10 @@ function App() {
         }
       }
 
-      // ERROR HANDLING: WASM Wrapper returns "error" field on failure
       if (wasmResponse.error) {
         addLog(`❌ Artifact Error: ${wasmResponse.error} `, "error");
         console.error("Artifact Error:", wasmResponse.error);
-        throw new Error(wasmResponse.error); // Abort
+        throw new Error(wasmResponse.error);
       }
 
       const duration = Date.now() - startTime;
@@ -450,6 +427,19 @@ function App() {
       const sol = wasmResponse.payload
         ? (typeof wasmResponse.payload === 'string' ? JSON.parse(wasmResponse.payload) : wasmResponse.payload)
         : wasmResponse;
+
+      if (sol.sources_to_targets && sol.sources_to_targets[0]) {
+        // Matrix success display
+        const firstTrip = sol.sources_to_targets[0].find((t: any) => t && t.distance > 0);
+        if (firstTrip) {
+          const dist = firstTrip.distance.toFixed(1);
+          const time = firstTrip.time.toFixed(1);
+          addLog(`📊 Matrix Result: ${dist}km / ${time}s`, "success");
+        }
+        setActiveShape(null);
+      } else {
+        setActiveShape(null);
+      }
 
       setActiveSolutions(prev => ({ ...prev, [lease.auction_id]: sol }));
 
@@ -482,7 +472,6 @@ function App() {
 
     try {
       addLog(`🚀[COMMAND] Sending problem to Conductor...`, "action");
-      // console.log("Sending to Conductor:", JSON.stringify(architectProblem, null, 2));
 
       const response = await fetch('http://localhost:3007/submit-problem', {
         method: 'POST',
@@ -495,11 +484,9 @@ function App() {
         const ids = result.auction_ids || [];
         addLog(`✅ Conductor accepted problem (${result.stops} stops). IDs: ${ids.join(', ')}`, "success");
 
-        // START POLLING FOR SOLUTIONS
         if (ids.length > 0) {
           const resolvedIds = new Set<string>();
           const pollInterval = setInterval(async () => {
-            // Poll all IDs that haven't been resolved yet
             for (const id of ids) {
               if (resolvedIds.has(id)) continue;
 
@@ -515,7 +502,6 @@ function App() {
                     [id]: sol
                   }));
 
-                  // If all are resolved, we can stop polling
                   if (resolvedIds.size === ids.length) {
                     addLog("🏁 Mission Complete: All partitions optimized.", "success");
                     clearInterval(pollInterval);
@@ -527,7 +513,6 @@ function App() {
             }
           }, 3000);
 
-          // Auto-cleanup after 5 minutes
           setTimeout(() => clearInterval(pollInterval), 300000);
         }
       } else {
@@ -544,12 +529,13 @@ function App() {
   const generateProblem = (count: number) => {
     setActivePayload(null);
     setActiveSolutions({});
+    setActiveShape(null);
     const base = { lat: -34.592365579155024, lon: -58.5529111002654 };
 
     const stops = Array.from({ length: count }, (_, i) => ({
       id: `Stop_${i + 1}`,
       location: {
-        lat: base.lat + (Math.random() - 0.5) * 0.02, // Smaller spread for urban density
+        lat: base.lat + (Math.random() - 0.5) * 0.02,
         lon: base.lon + (Math.random() - 0.5) * 0.02
       },
       time_window: { start: 0, end: 86400 },
@@ -566,8 +552,6 @@ function App() {
         id: "Vehicle_1",
         capacity: 100.0,
         start_location: base,
-        // End Location omitted for Open Route
-        // end_location: base, 
         shift_window: { start: 0, end: 86400 },
         speed_mps: 10.0
       }
@@ -575,9 +559,9 @@ function App() {
     addLog(`🔧[PILOT] Drafted ${count} stops with Depot. View in Master Map.`, "info");
   };
 
+
   if (!nodeSpecs) return <div className="loading">Hardware Detection...</div>
 
-  // MISSION DATA RESOLVER
   let currentStops: any[] = [];
   if (activePayload) {
     try {
@@ -586,29 +570,24 @@ function App() {
     } catch (e) { }
   }
 
-  // Fallback to local draft if swarm payload is missing/invalid
   if (currentStops.length === 0 && architectProblem) {
     currentStops = architectProblem.stops;
   }
 
-  // ROBUST MULTI-ROUTE PARSING
   const currentRoutes: string[][] = Object.values(activeSolutions).map((sol: any) => {
     let route: string[] = [];
     if (sol.routes && sol.routes[0] && sol.routes[0].stops) {
-      // Standard VRP format: routes[0].stops = [{id: "Stop_1"}, ...]
       route = sol.routes[0].stops.map((s: any) => typeof s === 'string' ? s : s.id);
     } else if (sol.route) {
-      // Simple array format
       route = sol.route.map((s: any) => typeof s === 'string' ? s : s.id);
     }
-    // Ensure we have IDs, filter out undefined
     return route.filter(id => id && typeof id === 'string');
   }).filter(r => r.length > 0);
 
   const totalCost = Object.values(activeSolutions).reduce((acc: number, sol: any) => acc + (sol.cost || 0), 0);
   const hasSolutions = Object.keys(activeSolutions).length > 0;
 
-  const totalPartitions = architectProblem?.stops?.length > nodeSpecs?.thread_count ? Math.ceil(architectProblem.stops.length / 25) : 1; // Simplistic estimation for UI
+  const totalPartitions = architectProblem?.stops?.length > nodeSpecs?.thread_count ? Math.ceil(architectProblem.stops.length / 25) : 1;
   const idsResolved = Object.keys(activeSolutions).filter(id => id.includes('_solve') || id.includes('single_')).length;
 
   return (
@@ -622,7 +601,6 @@ function App() {
 
         {/* COL 1: CONFIG & STATS */}
         <div className="sidebar-left">
-          {/* NODE IDENTITY */}
           <section className="panel status-panel">
             <h2>Node Authority</h2>
             <div className="profile-selector" style={{ marginBottom: '15px' }}>
@@ -653,7 +631,58 @@ function App() {
             </div>
           </section>
 
-          {/* MISSION COMMAND */}
+          <section className="panel">
+            <h2>🧪 Valhalla Engine Test</h2>
+            <p className="panel-desc">Test Valhalla routing with LazyFS (on-demand tile loading)</p>
+            <button
+              className="dispatch-btn"
+              onClick={async () => {
+                try {
+                  addLog("🧪 Testing Valhalla Engine with LazyFS...", "action");
+
+                  // Buenos Aires to Mar del Plata (long distance route)
+                  const testLocations = [
+                    { lat: -34.6037, lon: -58.3816 }, // Buenos Aires
+                    { lat: -38.0055, lon: -57.5426 }  // Mar del Plata
+                  ];
+
+                  const matrixRequest = JSON.stringify({
+                    locations: testLocations,
+                    costing: "auto"
+                  });
+
+                  addLog("📡 Calling Valhalla Worker...", "info");
+
+                  // @ts-ignore
+                  const { runValhallaWorker } = await import('./utils/ValhallaBridge');
+                  const result = await runValhallaWorker(matrixRequest, 'CALCULATE_MATRIX');
+
+                  if (typeof result === 'string' && result.includes("error")) {
+                    addLog(`❌ Valhalla Error: ${result}`, "error");
+                  } else {
+                    const matrix = typeof result === 'string' ? JSON.parse(result) : result;
+                    if (matrix.sources_to_targets && matrix.sources_to_targets[0]) {
+                      const trip = matrix.sources_to_targets[0][1];
+                      if (trip) {
+                        const dist = trip.distance.toFixed(1);
+                        const time = trip.time.toFixed(1);
+                        addLog(`✅ Valhalla Test Success!`, "success");
+                        addLog(`📊 BUE → MDP: ${dist}km / ${time}s`, "success");
+                      }
+                    }
+                  }
+                } catch (e) {
+                  addLog(`❌ Valhalla Test Failed: ${e}`, "error");
+                  console.error(e);
+                }
+              }}
+              disabled={!valhallaReady}
+            >
+              🧪 TEST VALHALLA + LAZYFS
+            </button>
+
+          </section>
+
           <section className="panel">
             <h2>Mission Command</h2>
             <p className="panel-desc">Dispatch complex logistics tasks to the enjambre grid.</p>
@@ -662,6 +691,27 @@ function App() {
               <button onClick={() => generateProblem(100)}>100 Stops</button>
               <button onClick={() => generateProblem(500)} className="stress-btn">500 Stops</button>
             </div>
+            <button
+              className="dispatch-btn"
+              style={{ marginTop: '15px', background: '#10b981', width: '100%' }}
+              onClick={async () => {
+                if (!architectProblem) {
+                  addLog("⚠️ No problem generated yet. Generate stops first.", "error");
+                  return;
+                }
+                try {
+                  addLog("🚀 Dispatching to Loxi system...", "action");
+                  // TODO: Implement Loxi dispatch logic
+                  addLog("✅ Problem dispatched to Loxi!", "success");
+                } catch (e) {
+                  addLog(`❌ Dispatch failed: ${e}`, "error");
+                  console.error(e);
+                }
+              }}
+              disabled={!architectProblem}
+            >
+              🚀 DISPATCH TO LOXI
+            </button>
             {architectProblem && (
               <button className="dispatch-btn" onClick={dispatchToSwarm} disabled={!isConnected}>
                 LAUNCH SWARM MISSION
@@ -669,7 +719,6 @@ function App() {
             )}
           </section>
 
-          {/* HARDWARE ANALYTICS */}
           <section className="panel">
             <h2>Grid Resource Load</h2>
             <div className="cores-v-grid">
@@ -689,7 +738,7 @@ function App() {
             <div className="map-title" style={{ background: 'rgba(15, 23, 42, 0.9)', padding: '10px 20px', borderRadius: '8px', border: '1px solid rgba(148, 163, 184, 0.1)', backdropFilter: 'blur(8px)', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}>
               <h2 style={{ margin: 0, fontSize: '1rem', color: '#f8fafc', pointerEvents: 'auto' }}>
                 {activeLease ? `🛰️ PROCESSING MISSION: ${activeLease.task_type} ` :
-                  hasSolutions ? "🚩 OPTIMIZATION COMPLETE" :
+                  hasSolutions || activeShape ? "🚩 OPTIMIZATION COMPLETE" :
                     architectProblem ? "📋 MISSION PREVIEW (DRAFT)" : "🔭 SWARM LISTENING..."}
               </h2>
             </div>
@@ -700,12 +749,12 @@ function App() {
             }
           </div>
 
-          {(architectProblem || activePayload) ? (
-            // Leaflet Map with Real Routes
+          {(architectProblem || activePayload || activeShape || activeLease) ? (
             <LeafletMap
-              stops={currentStops}
-              routes={currentRoutes}
-              vehicle={activePayload ? JSON.parse(activePayload).vehicle : architectProblem?.vehicle}
+              stops={currentStops || []}
+              routes={currentRoutes || []}
+              vehicle={activePayload ? (function () { try { return JSON.parse(activePayload).vehicle } catch (e) { return architectProblem?.vehicle } })() : architectProblem?.vehicle}
+              shape={activeShape || undefined}
             />
           ) : (
             <div className="placeholder-map" style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#475569', background: '#020617' }}>

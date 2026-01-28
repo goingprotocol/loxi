@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
 use std::fs;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
 use std::io::Write;
 
 pub struct TileDownloader;
@@ -21,7 +21,7 @@ impl TileDownloader {
         let base_url = "https://tile.openstreetmap.org"; // Placeholder source, normally Valhalla MVT/PBF source
         let cache_dir = get_cache_dir();
 
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
         {
             if !cache_dir.exists() {
                 fs::create_dir_all(&cache_dir).map_err(|e| e.to_string())?;
@@ -32,7 +32,7 @@ impl TileDownloader {
             let url = format!("{}/{}/{}/{}.png", base_url, z, x, y); // Using PNG for test, Valhalla uses PBF
 
             // Native Implementation
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
             {
                 let file_path = cache_dir.join(format!("{}_{}_{}.png", z, x, y));
                 if !file_path.exists() {
@@ -54,7 +54,7 @@ impl TileDownloader {
             }
 
             // WASM Implementation
-            #[cfg(target_arch = "wasm32")]
+            #[cfg(any(target_arch = "wasm32", target_arch = "wasm64"))]
             {
                 // In WASM, we can't block. We use fetch.
                 // For this MVP, we just log that we would download it.
@@ -75,11 +75,11 @@ impl TileDownloader {
 }
 
 fn get_cache_dir() -> PathBuf {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
     {
         PathBuf::from("/tmp/loxi_tiles")
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", target_arch = "wasm64"))]
     {
         PathBuf::from("/virtual/loxi_tiles")
     }

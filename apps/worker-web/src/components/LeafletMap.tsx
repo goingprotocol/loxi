@@ -19,11 +19,12 @@ interface LeafletMapProps {
         start_location: Location;
         end_location?: Location;
     };
+    shape?: string; // Encoded polyline from Valhalla
 }
 
 const COLORS = ['#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#06b6d4'];
 
-const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle }) => {
+const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle, shape }) => {
     const mapContainerRef = useRef<HTMLDivElement>(null);
     const mapInstance = useRef<L.Map | null>(null);
     const markersLayer = useRef<L.LayerGroup | null>(null);
@@ -55,18 +56,63 @@ const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle }) => {
             L.control.zoom({ position: 'bottomright' }).addTo(mapInstance.current);
 
             // FORZAR ACTUALIZACIÓN DE TAMAÑO (Solución al mapa gris)
+            const resizeObserver = new ResizeObserver(() => {
+                mapInstance.current?.invalidateSize();
+            });
+            if (mapContainerRef.current) {
+                resizeObserver.observe(mapContainerRef.current);
+            }
+
+            // Also a quick timeout just in case
             setTimeout(() => {
                 mapInstance.current?.invalidateSize();
             }, 200);
-        }
 
-        return () => {
-            if (mapInstance.current) {
-                mapInstance.current.remove();
-                mapInstance.current = null;
-            }
-        };
+            // Cleanup observer on unmount
+            return () => {
+                resizeObserver.disconnect();
+                if (mapInstance.current) {
+                    mapInstance.current.remove();
+                    mapInstance.current = null;
+                }
+            };
+        }
     }, []);
+
+    // Helper: Decode Google Polyline (Precision 6)
+    const decodePolyline = (str: string, precision: number) => {
+        var index = 0,
+            lat = 0,
+            lng = 0,
+            coordinates = [],
+            shift = 0,
+            result = 0,
+            byte = null,
+            latitude_change,
+            longitude_change,
+            factor = Math.pow(10, precision || 6);
+
+        while (index < str.length) {
+            byte = null; shift = 0; result = 0;
+            do {
+                byte = str.charCodeAt(index++) - 63;
+                result |= (byte & 0x1f) << shift;
+                shift += 5;
+            } while (byte >= 0x20);
+            latitude_change = ((result & 1) ? ~(result >> 1) : (result >> 1));
+            shift = result = 0;
+            do {
+                byte = str.charCodeAt(index++) - 63;
+                result |= (byte & 0x1f) << shift;
+                shift += 5;
+            } while (byte >= 0x20);
+            longitude_change = ((result & 1) ? ~(result >> 1) : (result >> 1));
+            lat += latitude_change;
+            lng += longitude_change;
+            coordinates.push([lat / factor, lng / factor]);
+        }
+        return coordinates;
+    };
 
     // 2. UPDATE MARKERS & ROUTES
     useEffect(() => {
@@ -76,29 +122,65 @@ const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle }) => {
         markersLayer.current.clearLayers();
         polylineLayer.current.clearLayers();
 
-        if (stops.length === 0) return;
-
-        // Validate stops have location data
-        const validStops = stops.filter(s => s?.location?.lat != null && s?.location?.lon != null);
-        if (validStops.length === 0) return;
-
         const bounds = L.latLngBounds([]);
-        const stopMap = new Map(stops.map(s => [s.id, s]));
 
-        // Add Markers (Circle style like Google Maps version)
-        stops.forEach((stop) => {
-            const marker = L.circleMarker([stop.location.lat, stop.location.lon], {
-                radius: 6,
-                fillColor: '#3b82f6',
-                color: '#ffffff',
-                weight: 1,
-                opacity: 1,
-                fillOpacity: 1
-            }).bindTooltip(stop.id, { permanent: false, direction: 'top' });
+        // A. Render Raw Encoded Polyline (Valhalla Shape)
+        if (shape) {
+            const decoded = decodePolyline(shape, 6);
+            if (decoded.length > 0) {
+                const polyline = L.polyline(decoded as L.LatLngExpression[], {
+                    color: '#8b5cf6', // Strong Violet
+                    weight: 6,
+                    opacity: 0.9,
+                    lineJoin: 'round'
+                });
+                polylineLayer.current.addLayer(polyline);
 
-            markersLayer.current?.addLayer(marker);
-            bounds.extend([stop.location.lat, stop.location.lon]);
-        });
+                decoded.forEach(pt => bounds.extend(pt as L.LatLngExpression));
+            }
+        }
+
+        if (stops && stops.length > 0) {
+            const stopMap = new Map(stops.map(s => [s.id, s]));
+
+            // Add Markers (Circle style like Google Maps version)
+            stops.forEach((stop) => {
+                if (!stop.location) return;
+                const marker = L.circleMarker([stop.location.lat, stop.location.lon], {
+                    radius: 6,
+                    fillColor: '#3b82f6',
+                    color: '#ffffff',
+                    weight: 1,
+                    opacity: 1,
+                    fillOpacity: 1
+                }).bindTooltip(stop.id, { permanent: false, direction: 'top' });
+
+                markersLayer.current?.addLayer(marker);
+                bounds.extend([stop.location.lat, stop.location.lon]);
+            });
+
+            // Add Polylines (VRP Route IDs)
+            if (routes && routes.length > 0) {
+                routes.forEach((route, index) => {
+                    if (route.length < 2) return;
+
+                    const pathCoords: L.LatLngExpression[] = route
+                        .map(id => stopMap.get(id))
+                        .filter(s => !!s && s.location)
+                        .map(s => [s!.location.lat, s!.location.lon] as L.LatLngExpression);
+
+                    if (pathCoords.length > 1) {
+                        const polyline = L.polyline(pathCoords, {
+                            color: COLORS[index % COLORS.length],
+                            weight: 4,
+                            opacity: 0.8,
+                            lineJoin: 'round'
+                        });
+                        polylineLayer.current?.addLayer(polyline);
+                    }
+                });
+            }
+        }
 
         // Add Vehicle Depot Markers (Differentiating Start/End)
         if (vehicle) {
@@ -129,28 +211,6 @@ const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle }) => {
             }
         }
 
-        // Add Polylines
-        if (routes && routes.length > 0) {
-            routes.forEach((route, index) => {
-                if (route.length < 2) return;
-
-                const pathCoords: L.LatLngExpression[] = route
-                    .map(id => stopMap.get(id))
-                    .filter(s => !!s)
-                    .map(s => [s!.location.lat, s!.location.lon] as L.LatLngExpression);
-
-                if (pathCoords.length > 1) {
-                    const polyline = L.polyline(pathCoords, {
-                        color: COLORS[index % COLORS.length],
-                        weight: 4,
-                        opacity: 0.8,
-                        lineJoin: 'round'
-                    });
-                    polylineLayer.current?.addLayer(polyline);
-                }
-            });
-        }
-
         // Auto-center with padding
         if (bounds.isValid()) {
             mapInstance.current.fitBounds(bounds, {
@@ -158,7 +218,7 @@ const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle }) => {
             });
         }
 
-    }, [stops, routes, vehicle]);
+    }, [stops, routes, vehicle, shape]);
 
     return (
         <div

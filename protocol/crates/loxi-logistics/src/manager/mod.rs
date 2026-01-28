@@ -6,10 +6,11 @@ pub mod types;
 use crate::manager::core::CoreLogistics;
 use loxi_core::{DomainAuthority, Message as LoxiMessage, TaskRequirement, TaskType};
 use serde::{Deserialize, Serialize};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
 use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
 use tokio::sync::{mpsc, Mutex};
+#[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
 use uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,7 +27,7 @@ pub struct LogisticsManager {
     // Task Cache for Direct Data Route
     pub pending_problems: std::collections::HashMap<String, types::Problem>,
     // Active Room Connections: auction_id -> Vec<mpsc::Sender<WsMessage>>
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
     pub active_rooms: std::collections::HashMap<
         String,
         Vec<mpsc::Sender<tokio_tungstenite::tungstenite::Message>>,
@@ -47,7 +48,7 @@ impl LogisticsManager {
             auction_manager: auction::AuctionManager::new(),
             core: CoreLogistics::new(),
             pending_problems: std::collections::HashMap::new(),
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
             active_rooms: std::collections::HashMap::new(),
         };
         slf.load_state();
@@ -137,7 +138,13 @@ impl LogisticsManager {
                 "🚀 [Engine] Bypassing partitioning for mission of {} stops.",
                 problem.stops.len()
             );
+            #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
             let task_id = format!("single_{}", uuid::Uuid::new_v4());
+            #[cfg(any(target_arch = "wasm32", target_arch = "wasm64"))]
+            let task_id = format!(
+                "single_wasm_{}",
+                problem.stops.first().map(|s| s.id.as_str()).unwrap_or("unknown")
+            );
             let req = self.generate_worker_request(task_id.clone(), TaskType::Matrix, 1024);
 
             self.pending_problems.insert(task_id.clone(), problem.clone());
@@ -500,7 +507,7 @@ impl LogisticsManager {
 
     /// Step 5: Start a Direct Data Server (The "Sala" / Private Room)
     /// This allows workers to connect directly to the Architect for data exchange.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
     pub async fn start_data_server(
         self_arc: Arc<Mutex<Self>>,
         port: u16,
@@ -523,7 +530,7 @@ impl LogisticsManager {
         Ok(())
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
     async fn handle_worker_direct(
         stream: tokio::net::TcpStream,
         manager: Arc<Mutex<Self>>,
