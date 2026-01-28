@@ -37,3 +37,6 @@ protocol/apps/worker-web/public/artifacts/
 /benchmark-results/
 
 node_modules
+
+# AI Chat Logs
+chatai/
