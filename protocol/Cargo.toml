@@ -41,8 +41,9 @@ approx = "0.5"
 
 [profile.release]
 lto = true
-opt-level = 3
+opt-level = "z"
 codegen-units = 1
+panic = "abort"
 
 [profile.bench]
 inherits = "release"

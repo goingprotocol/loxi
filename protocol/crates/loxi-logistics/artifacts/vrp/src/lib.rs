@@ -30,7 +30,7 @@ pub struct Stop {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Vehicle {
     pub start_location: Location,
-    pub end_location: Location,
+    pub end_location: Option<Location>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,12 +140,9 @@ fn solve_internal(problem: VrpProblem) -> VrpSolution {
     let unassigned_jobs: Vec<String> = stop_indices.iter().map(|&i| stops[i].id.clone()).collect();
 
     if let Some(_prev_idx) = current_idx {
-        total_cost += if let Some(ref _matrix) = problem.distance_matrix {
-            // Simplify return to base cost logic
-            current_loc.distance_to(&problem.vehicle.end_location)
-        } else {
-            current_loc.distance_to(&problem.vehicle.end_location)
-        };
+        let end_loc =
+            problem.vehicle.end_location.as_ref().unwrap_or(&problem.vehicle.start_location);
+        total_cost += current_loc.distance_to(end_loc);
     }
 
     VrpSolution {

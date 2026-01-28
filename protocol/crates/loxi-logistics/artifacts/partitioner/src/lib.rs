@@ -37,6 +37,7 @@ impl LoxiArtifact for PartitionerArtifact {
                     distance_matrix: None,
                     time_matrix: None,
                     seed: problem.seed,
+                    solution: None,
                 });
             }
         }

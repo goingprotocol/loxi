@@ -90,6 +90,7 @@ impl LoxiArtifact for SectorArtifact {
                     distance_matrix: None,
                     time_matrix: None,
                     seed: problem.seed,
+                    solution: None,
                 };
 
                 // Attach sliced matrices

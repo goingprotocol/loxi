@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::{mpsc, Mutex};
+use uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LogisticsJob {
@@ -117,10 +118,35 @@ impl LogisticsManager {
     }
 
     /// Step 3: Conduct the competitive auction or delegate partitioning.
-    pub fn distribute_tasks(&mut self, problem: &types::Problem) -> Vec<LoxiMessage> {
+    pub fn distribute_tasks(
+        &mut self,
+        problem: &types::Problem,
+    ) -> (Vec<LoxiMessage>, Vec<String>) {
         let mut messages = Vec::new();
+        let mut ids = Vec::new();
 
         // --- HIERARCHICAL ORCHESTRATION ---
+
+        // 0. BYPASS: If the problem is small enough, don't partition.
+        println!(
+            "🔍 [Engine] distribute_tasks check: {} stops. (Threshold: 12)",
+            problem.stops.len()
+        );
+        if problem.stops.len() <= 12 {
+            println!(
+                "🚀 [Engine] Bypassing partitioning for mission of {} stops.",
+                problem.stops.len()
+            );
+            let task_id = format!("single_{}", uuid::Uuid::new_v4());
+            let req = self.generate_worker_request(task_id.clone(), TaskType::Matrix, 1024);
+
+            self.pending_problems.insert(task_id.clone(), problem.clone());
+            ids.push(task_id.clone());
+            messages.push(self.auction_manager.create_auction(task_id, req, None));
+
+            self.save_state();
+            return (messages, ids);
+        }
 
         // 1. MACRO-STAGE: For massive problems (>5000 stops), we perform "Macro-Partitioning"
         // to create Large Blocks (Sectors).
@@ -156,11 +182,12 @@ impl LogisticsManager {
                     self.generate_worker_request(sector_id.clone(), TaskType::Partition, 8192);
 
                 self.pending_problems.insert(sector_id.clone(), sub_problem);
+                ids.push(sector_id.clone());
                 messages.push(self.auction_manager.create_auction(sector_id, req, None));
             }
 
             self.save_state();
-            return messages;
+            return (messages, ids);
         }
 
         // 2. MICRO-STAGE: For manageable problems (<5000), we partition locally directly into Routes.
@@ -182,6 +209,7 @@ impl LogisticsManager {
                 distance_matrix: None,
                 time_matrix: None,
                 seed: problem.seed,
+                solution: None,
             };
 
             // Stage 2 for these partitions: MATRIX calculation
@@ -190,6 +218,7 @@ impl LogisticsManager {
 
             // SAVE to Stock
             self.pending_problems.insert(sub_id.clone(), sub_problem);
+            ids.push(sub_id.clone());
 
             println!("🚀 [Engine] Created Matrix Task: {}", sub_id);
 
@@ -198,7 +227,7 @@ impl LogisticsManager {
         }
 
         self.save_state();
-        messages
+        (messages, ids)
     }
 
     /// Step 4: Automate multi-stage pipelines (The "Conductor" Role)
@@ -322,7 +351,12 @@ impl LogisticsManager {
                     return outbound;
                 }
                 // --- STAGE 2: MATRIX COMPLETE (Route Level) ---
-                else if auction_id.contains("_p") && !auction_id.contains("solve") {
+                else if (auction_id.contains("part_")
+                    || auction_id.contains("_p")
+                    || auction_id.contains("_s")
+                    || auction_id.contains("single_"))
+                    && !auction_id.contains("solve")
+                {
                     if let Some(mut master_problem) =
                         self.pending_problems.get(&auction_id).cloned()
                     {
@@ -379,12 +413,26 @@ impl LogisticsManager {
                 else if auction_id.contains("solve")
                     || auction_id.contains("_r")
                     || auction_id.contains("_s_solve")
+                    || auction_id.contains("single_solve")
                 {
                     println!(
                         "🏁 Manager: Final Solver Solution received for {} (Cost: {})",
                         auction_id, solution.cost
                     );
 
+                    if let Some(mut master_problem) =
+                        self.pending_problems.get(&auction_id).cloned()
+                    {
+                        if let Some(ref payload) = solution.payload {
+                            if let Ok(sol) = serde_json::from_str::<types::Solution>(payload) {
+                                master_problem.solution = Some(sol);
+                                self.pending_problems.insert(auction_id.clone(), master_problem);
+                                self.save_state();
+                            }
+                        }
+                    }
+
+                    /*
                     if !solution.unassigned_jobs.is_empty() {
                         println!(
                             "⚠️ Manager: {} UNASSIGNED JOBS in {}. Triggering healing auction...",
@@ -435,6 +483,7 @@ impl LogisticsManager {
                             }
                         }
                     }
+                    */
 
                     return Vec::new();
                 }

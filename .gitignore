@@ -1,5 +1,5 @@
 # Rust
-/target/
+target/
 **/*.rs.bk
 *.pdb
 # Cargo.lock is typically committed for applications/CLIs to ensure reproducible builds.
@@ -14,6 +14,7 @@
 *.swp
 *.swo
 *~
+*.gph
 
 # OS
 .DS_Store

@@ -61,18 +61,21 @@ async fn main() {
             .allow_methods(vec!["GET", "POST", "OPTIONS"])
             .allow_headers(vec!["Content-Type"]);
 
+        let manager_for_submit = manager_for_http.clone();
+        let tx_for_submit = tx_clone.clone();
+
         let submit_problem = warp::post()
             .and(warp::path("submit-problem"))
             .and(warp::body::json())
             .and_then(move |problem: loxi_logistics::manager::types::Problem| {
-                let manager = manager_for_http.clone();
-                let tx = tx_clone.clone();
+                let manager = manager_for_submit.clone();
+                let tx = tx_for_submit.clone();
                 async move {
                     let mut mg = manager.lock().await;
                     println!("📥 HTTP: Received problem with {} stops", problem.stops.len());
 
                     // Start the pipeline by distributing tasks
-                    let messages = mg.distribute_tasks(&problem);
+                    let (messages, ids) = mg.distribute_tasks(&problem);
 
                     // Send all initial tasks through the channel
                     for msg in messages {
@@ -83,14 +86,36 @@ async fn main() {
 
                     Ok::<_, warp::Rejection>(warp::reply::json(&serde_json::json!({
                         "status": "accepted",
-                        "stops": problem.stops.len()
+                        "stops": problem.stops.len(),
+                        "auction_ids": ids
                     })))
                 }
-            })
-            .with(cors);
+            });
+
+        let get_solution = warp::get()
+            .and(warp::path("get-solution"))
+            .and(warp::query::<std::collections::HashMap<String, String>>())
+            .and_then(move |params: std::collections::HashMap<String, String>| {
+                let manager = manager_for_http.clone();
+                async move {
+                    if let Some(auction_id) = params.get("auction_id") {
+                        let mg = manager.lock().await;
+                        if let Some(problem) = mg.pending_problems.get(auction_id) {
+                            if let Some(ref solution) = problem.solution {
+                                return Ok::<_, warp::Rejection>(warp::reply::json(&solution));
+                            }
+                        }
+                    }
+                    Ok::<_, warp::Rejection>(warp::reply::json(&serde_json::json!({
+                        "status": "pending"
+                    })))
+                }
+            });
+
+        let routes = submit_problem.or(get_solution).with(cors);
 
         println!("🌐 HTTP Server listening on: http://0.0.0.0:3007");
-        warp::serve(submit_problem).run(([0, 0, 0, 0], 3007)).await;
+        warp::serve(routes).run(([0, 0, 0, 0], 3007)).await;
     });
 
     println!("📡 Awaiting tasks from the grid...");

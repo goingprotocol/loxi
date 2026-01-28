@@ -29,8 +29,8 @@ impl VrpSolver {
         let config = VrpConfigBuilder::new(core_problem.clone())
             .prebuild()
             .map_err(|e| format!("Failed to prebuild solver config: {}", e))?
-            .with_max_time(Some(2)) // Try 2s limit
-            .with_max_generations(Some(10)) // Force max 10 generations for speed
+            // .with_max_time(Some(2)) // Try 2s limit
+            // .with_max_generations(Some(10)) // Force max 10 generations for speed
             .build()
             .map_err(|e| format!("Failed to build solver config: {}", e))?;
 
@@ -173,10 +173,26 @@ impl VrpSolver {
             }
         }
 
+        let mut unassigned_jobs = Vec::new();
+        if let Some(unassigned) = &sol.unassigned {
+            for job in unassigned {
+                let reason = job
+                    .reasons
+                    .first()
+                    .map(|r| r.code.clone())
+                    .unwrap_or_else(|| "unknown".to_string());
+                // Format: "job_id (THREAD: reason)" to be visible in simple string lists
+                unassigned_jobs.push(format!("{} ({})", job.job_id, reason));
+            }
+        }
+
         let cost = sol.statistic.cost;
         let metadata = SolutionMetadata::new("vrp-rs-pragmatic", 0);
 
-        Ok(LoxiSolution::new(route, cost, metadata))
+        let mut loxi_sol = LoxiSolution::new(route, cost, metadata);
+        loxi_sol.unassigned_jobs = unassigned_jobs;
+
+        Ok(loxi_sol)
     }
 
     fn format_time(seconds: u32) -> String {

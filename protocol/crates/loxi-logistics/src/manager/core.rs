@@ -12,7 +12,7 @@ pub struct CoreLogistics {
 
 impl CoreLogistics {
     pub fn new() -> Self {
-        Self { resolution: Resolution::Nine, max_cluster_size: 50 }
+        Self { resolution: Resolution::Eight, max_cluster_size: 20 }
     }
 
     /// Pure function: Chops the problem into Partitions using H3 logic.

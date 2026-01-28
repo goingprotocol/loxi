@@ -11,7 +11,8 @@ pub struct Auction {
     pub requirement: TaskRequirement,
     pub bids: Vec<Bid>,
     pub created_at: u64,
-    pub posted_by: String, // Architect/Authority ID
+    pub assigned_at: Option<u64>, // Timestamp when lease was assigned
+    pub posted_by: String,        // Architect/Authority ID
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -19,6 +20,7 @@ pub enum AuctionStatus {
     Open,
     Closed,
     Assigned(String), // Worker ID
+    Completed,
 }
 
 pub struct AuctionManager {
@@ -43,7 +45,8 @@ impl AuctionManager {
             status: AuctionStatus::Open,
             requirement: req.clone(),
             bids: Vec::new(),
-            created_at: 0,
+            created_at: Self::now(),
+            assigned_at: None,
             posted_by,
         };
 
@@ -93,6 +96,7 @@ impl AuctionManager {
                 OrchestratorLogic::select_best_node(&candidates, &auction.requirement)
             {
                 auction.status = AuctionStatus::Assigned(assignment.node_id.clone());
+                auction.assigned_at = Some(Self::now());
                 Some(assignment)
             } else {
                 None
@@ -104,5 +108,46 @@ impl AuctionManager {
 
     pub fn get_auction(&self, auction_id: &str) -> Option<&Auction> {
         self.auctions.get(auction_id)
+    }
+
+    pub fn get_auction_mut(&mut self, auction_id: &str) -> Option<&mut Auction> {
+        self.auctions.get_mut(auction_id)
+    }
+
+    /// Check for leases that have exceeded the timeout duration without a solution.
+    /// Returns a list of (AuctionID, TaskRequirement) to be re-broadcasted.
+    pub fn check_expired_leases(
+        &mut self,
+        timeout_ms: u64,
+    ) -> Vec<(String, TaskRequirement, String)> {
+        let now = Self::now();
+        let mut expired = Vec::new();
+
+        for (id, auction) in self.auctions.iter_mut() {
+            if let AuctionStatus::Assigned(_) = auction.status {
+                if let Some(assigned_at) = auction.assigned_at {
+                    if now - assigned_at > timeout_ms {
+                        // EXPIRED!
+                        // Reset to Open
+                        auction.status = AuctionStatus::Open;
+                        auction.bids.clear(); // Clear old bids
+                        auction.assigned_at = None;
+
+                        expired.push((
+                            id.clone(),
+                            auction.requirement.clone(),
+                            auction.posted_by.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        expired
+    }
+
+    fn now() -> u64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
     }
 }

@@ -21,7 +21,7 @@ impl Partitioner {
         Self {
             resolution: Resolution::Nine, // ~170m edge length
             min_cluster_size: 10,
-            max_cluster_size: 50,
+            max_cluster_size: 100,
         }
     }
 
@@ -30,7 +30,7 @@ impl Partitioner {
         let mut initial_buckets: HashMap<CellIndex, Vec<String>> = HashMap::new();
 
         // 1. Quantize (Binning) - Group stops by their H3 Cell based on actual location
-        for (i, stop) in problem.stops.iter().enumerate() {
+        for (_i, stop) in problem.stops.iter().enumerate() {
             let lat = stop.location.lat;
             let lon = stop.location.lon;
 

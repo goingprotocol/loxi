@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { loadValhalla } from './utils/ValhallaLoader';
-import { callValhallaBridge } from './utils/ValhallaBridge';
-import { loadTilesForRegion, calculateBoundingBox } from './utils/ValhallaTileLoader';
+import { callValhallaBridge, callValhallaBridgeSync } from './utils/ValhallaBridge';
+import { loadSmartTiles, calculateBoundingBox } from './utils/ValhallaTileLoader';
 import './App.css'
 import LeafletMap from './components/LeafletMap';
 
@@ -9,6 +9,7 @@ import LeafletMap from './components/LeafletMap';
 declare global {
   interface Window {
     callValhallaBridge: (input: string) => string;
+    callValhallaBridgeSync: (input: string) => any;
   }
 }
 
@@ -54,7 +55,8 @@ function App() {
   const [activePayload, setActivePayload] = useState<string | null>(null)
   const [nodeSpecs, setNodeSpecs] = useState<NodeSpecs | null>(null)
   const [architectProblem, setArchitectProblem] = useState<any>(null)
-  const [activeSolution, setActiveSolution] = useState<any>(null)
+  const [activeSolutions, setActiveSolutions] = useState<Record<string, any>>({})
+  const [valhallaReady, setValhallaReady] = useState(false)
   const [cores, setCores] = useState<number[]>([])
 
   const wsRef = useRef<WebSocket | null>(null)
@@ -76,12 +78,13 @@ function App() {
       applyProfile(threads, ramGb);
 
       try {
-        await loadValhalla();
-        addLog("✅ Valhalla Engine Loaded", "success");
-        console.log("🗺️ Valhalla WASM ready. Tiles will be downloaded on-demand per task.");
+        // Obviamos la carga en el hilo principal para liberar RAM para los Workers.
+        // Valhalla se cargará bajo demanda en hilos separados.
+        setValhallaReady(true);
+        addLog("✅ Valhalla Engine Ready (Worker-Only Mode)", "success");
       } catch (e) {
         console.error("Valhalla Load Failed", e);
-        addLog("❌ Valhalla Engine Failed", "error");
+        addLog("❌ Valhalla Engine Initialization Failed", "error");
       }
     };
     detectHardware();
@@ -181,7 +184,8 @@ function App() {
             addLog(`✅ Solution Published by ${shortId(worker_id)} for ${shortId(auction_id)}`, "success");
             if (payload) {
               try {
-                setActiveSolution(JSON.parse(payload));
+                const sol = JSON.parse(payload);
+                setActiveSolutions(prev => ({ ...prev, [auction_id]: sol }));
               } catch (e) {
                 console.warn("Payload decode fail");
               }
@@ -209,7 +213,6 @@ function App() {
       // AUTO-FIX: Force localhost for local dev if stale IP is detected
       if (archAddr.includes("192.168.0.196")) {
         archAddr = archAddr.replace("192.168.0.196", "localhost");
-        console.warn("🔧 Auto-corrected Authority Address to localhost");
       }
 
       // OPTIMIZATION: Only fetch from Data Stream if payload is missing
@@ -257,76 +260,66 @@ function App() {
         }
       } catch (e) { /* Not a JSON envelope, proceed as raw */ }
 
-      // PRE-LOAD VALHALLA TILES
-      try {
-        console.log("🔍 Attempting to pre-load tiles...");
-        const problemData = JSON.parse(unwrappedPayload);
-        console.log("🔍 Problem data parsed:", Object.keys(problemData));
+      console.log("📦 [APP-DEBUG] Unwrapped Payload Preview:", unwrappedPayload.substring(0, 500));
 
-        // Extract locations from either Matrix format or VRP format
-        let locations: Array<{ lat: number; lon: number }> = [];
+      // ============================================================
+      // 🧠 SMART TILE LOADING STRATEGY
+      // ============================================================
+      // Si la tarea es VRP, necesitamos tiles en el Main Thread (porque VRP usa callValhallaBridgeSync).
+      // Si la tarea es Matrix (Valhalla Worker), NO cargamos tiles aquí para ahorrar RAM.
+      const requiresMainThreadTiles = hash === "loxi_vrp_artifact_v1" || hash === "loxi_sector_v1";
 
-        if (problemData.locations && Array.isArray(problemData.locations)) {
-          // Matrix format
-          locations = problemData.locations;
-        } else if (problemData.stops && Array.isArray(problemData.stops)) {
-          // VRP format - extract lat/lon from stops
-          const vehicleStart = problemData.vehicle?.start_location;
-          const vehicleEnd = problemData.vehicle?.end_location;
+      if (requiresMainThreadTiles) {
+        try {
+          console.log("🔍 Pre-loading tiles for Main Thread Execution...");
+          const problemData = JSON.parse(unwrappedPayload);
+          let locations: Array<{ lat: number; lon: number }> = [];
 
-          const stopLocations = problemData.stops.map((stop: any) => ({
-            lat: stop.location.lat,
-            lon: stop.location.lon
-          }));
-
-          // Construct sequence: [Start, ...Stops, End]
-          // Using a Set-like approach to avoid exact duplicates if depot is already a stop
-          locations = [];
-          if (vehicleStart) locations.push(vehicleStart);
-          locations.push(...stopLocations);
-          if (vehicleEnd && (vehicleEnd.lat !== vehicleStart?.lat || vehicleEnd.lon !== vehicleStart?.lon)) {
-            locations.push(vehicleEnd);
+          if (problemData.locations) {
+            locations = problemData.locations;
+          } else if (problemData.stops) {
+            const vehicleStart = problemData.vehicle?.start_location;
+            const stopLocations = problemData.stops.map((stop: any) => stop.location);
+            locations = [vehicleStart, ...stopLocations].filter(l => l);
           }
 
-          console.log("🔍 Problem context extracted:", {
-            stops: stopLocations.length,
-            hasStart: !!vehicleStart,
-            hasEnd: !!vehicleEnd
-          });
-        }
+          if (locations.length > 0) {
+            addLog("📦 Loading tiles (Main Thread)...", "action");
+            const bbox = calculateBoundingBox(locations);
 
-        if (locations.length > 0) {
-          addLog("📦 Loading tiles...", "action");
-          const bbox = calculateBoundingBox(locations);
+            const tileServerUrl = import.meta.env.VITE_TILE_SERVER_URL || 'http://localhost:8080';
+            // --- FIX: Await Valhalla with fallback if not ready ---
+            let module = window.valhallaModule;
+            if (!module) {
+              console.log("⏳ Valhalla not ready for tiles. Waiting for initialization...");
+              module = await loadValhalla();
+            }
 
-          const tileServerUrl = import.meta.env.VITE_TILE_SERVER_URL || 'http://localhost:8080';
-          // --- FIX: Await Valhalla with fallback if not ready ---
-          let module = window.valhallaModule;
-          if (!module) {
-            console.log("⏳ Valhalla not ready for tiles. Waiting for initialization...");
-            module = await loadValhalla();
-          }
-
-          if (module) {
-            await loadTilesForRegion(module, bbox, tileServerUrl, (loaded, total) => {
-              if (loaded % 5 === 0 || loaded === total) {
-                console.log(`⏳ Tiles: ${loaded}/${total}`);
-              }
-            });
-            addLog("✅ Tiles ready", "success");
+            if (module) {
+              await loadSmartTiles(module, locations, tileServerUrl, (loaded, total) => {
+                if (loaded % 5 === 0 || loaded === total) {
+                  console.log(`⏳ Tiles: ${loaded}/${total}`);
+                }
+              });
+              addLog("✅ Tiles ready", "success");
+            } else {
+              throw new Error("Valhalla engine failed to initialize");
+            }
           } else {
-            throw new Error("Valhalla engine failed to initialize");
+            console.warn("⚠️ No locations found in problem data");
           }
-        } else {
-          console.warn("⚠️ No locations found in problem data");
+        } catch (e) {
+          console.warn("⚠️ Tile pre-load warning:", e);
+          if (hash === "loxi_sector_v1") {
+            addLog("❌ Valhalla Initialization Failed", "error");
+            throw e; // Abort the task if it depends on Valhalla
+          }
         }
-      } catch (e) {
-        console.warn("⚠️ Tile pre-load warning:", e);
-        if (hash === "loxi_sector_v1" || hash === "loxi_valhalla_v1") {
-          addLog("❌ Valhalla Initialization Failed", "error");
-          throw e; // Abort the task if it depends on Valhalla
-        }
+      } else {
+        console.log("⏩ Skipping Main Thread Tile Load (Worker will handle it).");
       }
+      // ============================================================
+
 
       const startTime = Date.now();
       let wasmResponseRaw = "";
@@ -336,64 +329,13 @@ function App() {
         // --- VRP SOLVER ARTIFACT ---
         const module = await import(/* @vite-ignore */ `${window.location.origin}/artifacts/loxi_vrp_artifact.js`);
         await module.default();
+        const solverInput = JSON.stringify({
+          auction_id: lease.auction_id,
+          domain_id: "logistics",
+          payload: unwrappedPayload // This is the JSON string of the domain data (stops + matrix)
+        });
 
-        // 1. GENERATE MATRIX IF VALHALLA IS AVAILABLE
-        let enrichedPayload = unwrappedPayload;
-        try {
-          const problem = JSON.parse(unwrappedPayload);
-          // Only generate matrix if not present and we have stops
-          if (!problem.matrix && problem.stops && problem.stops.length > 0) {
-            console.log("🧩 Generating Matrix for VRP...");
-            addLog("📏 Calculating Cost Matrix...", "action");
-
-            const stops = problem.stops.map((s: any) => s.location);
-            const start = problem.vehicle?.start_location || stops[0];
-            const end = problem.vehicle?.end_location;
-
-            // Locations: [Start, ...Stops, End] (Generic VRP structure)
-            const locations = [start, ...stops];
-            if (end && (end.lat !== start.lat || end.lon !== start.lon)) {
-              locations.push(end);
-            }
-
-            // Call Valhalla Bridge
-            const matrixJson = JSON.stringify({ locations, costing: "auto" });
-            const matrixResRaw = await callValhallaBridge(matrixJson);
-            const matrixRes = JSON.parse(matrixResRaw);
-
-            if (matrixRes.sources_to_targets) {
-              console.log("✅ Matrix Calculated:", matrixRes.sources_to_targets.length + "x" + matrixRes.sources_to_targets[0].length);
-
-              // Transform to pure arrays
-              const distance_matrix = matrixRes.sources_to_targets.map((row: any[]) => row.map(cell => cell.distance * 1000)); // KM to Meters! Valhalla is KM often, or check units?
-              // Valhalla default units: kilometers (distance), seconds (time).
-              // Loxi-Logistics (VRP) likely expects Meters and Seconds. 
-              // WARNING: Check Loxi units. Default to meters.
-
-              const time_matrix = matrixRes.sources_to_targets.map((row: any[]) => row.map(cell => cell.time));
-
-              problem.matrix = {
-                distances: distance_matrix,
-                durations: time_matrix
-                // dimensions?
-              };
-
-              // Alternative keys based on rust struct?
-              // Often "distance_matrix" and "duration_matrix" at root or inside "matrix"
-              // Let's attach at root for safety too if the rust struct is flat
-              problem.distance_matrix = distance_matrix;
-              problem.duration_matrix = time_matrix;
-
-              enrichedPayload = JSON.stringify(problem);
-              addLog("✅ Matrix Injected", "success");
-            }
-          }
-        } catch (e) {
-          console.warn("⚠️ Matrix Generation Failed (Fallack to Haversine):", e);
-          addLog("⚠️ Matrix Failed - Using Haversine", "error");
-        }
-
-        wasmResponseRaw = module.solve(enrichedPayload);
+        wasmResponseRaw = module.solve(solverInput);
         console.log("🧩 VRP RAW Response:", wasmResponseRaw);
 
       } else if (hash === "loxi_partitioner_v1") {
@@ -403,65 +345,97 @@ function App() {
         await module.default(`${window.location.origin}/artifacts/loxi_partition_artifact_bg.wasm`);
         wasmResponseRaw = module.partition(unwrappedPayload);
 
-      } else if (hash === "loxi_sector_v1" || hash === "loxi_valhalla_v1") {
-        // --- SECTOR / MATRIX ARTIFACT (Titan Potencia) ---
-        let vModule = (window as any).valhallaModule;
-        if (!vModule) {
-          console.log("⏳ Initializing Valhalla for Artifact execution...");
-          vModule = await loadValhalla();
-        }
-
-        // The engine is already initialized by loadTilesForRegion above if locations were found.
-        // If no locations were found, matrix results will be empty anyway.
-
-        // Define the Bridge with Auto-Retry for cold starts
-        // Define the Bridge with Auto-Retry for cold starts
-        // @ts-ignore
-        window.callValhallaBridge = callValhallaBridge; // Use imported utility
-
-
-        const isSector = hash === "loxi_sector_v1";
-        const artBasename = isSector ? "loxi_sector_artifact" : "loxi_matrix_artifact";
-        const artModule = await import(/* @vite-ignore */ `${window.location.origin}/artifacts/${artBasename}.js`);
-        await artModule.default(`${window.location.origin}/artifacts/${artBasename}_bg.wasm`);
-
-        console.log(`📏 Executing ${artBasename}...`);
+      } else if (hash === "loxi_sector_v1") {
+        // --- SECTOR / MATRIX ARTIFACT (LEGACY/FALLBACK) ---
+        // Requires Main Thread Tiles (Already Handled)
 
         let input = unwrappedPayload;
         try {
           const problem = JSON.parse(unwrappedPayload);
-          if (hash === "loxi_valhalla_v1" && problem.stops) {
+          // Standardize Input for Matrix Tasks
+          if (problem.stops) {
             const stops = problem.stops.map((s: any) => s.location);
             const start = problem.vehicle?.start_location || stops[0];
             const end = problem.vehicle?.end_location;
 
-            // Unique set of locations for the matrix (Depot Start + Stops + Depot End)
-            // But for Matrix we usually want all-to-all starting from Depot
             const locations = [start, ...stops];
             if (end && (end.lat !== start.lat || end.lon !== start.lon)) {
               locations.push(end);
             }
-
-            // Valhalla needs at least 2 locations for a matrix
-            if (locations.length < 2) {
-              console.warn("⚠️ Minimal locations reached, adding dummy return");
-              wasmResponseRaw = JSON.stringify({
-                sources_to_targets: [[{ distance: 0, time: 0 }]],
-                costing: "auto"
-              });
-            } else {
-              input = JSON.stringify({ locations, costing: "auto" });
-            }
           }
         } catch (e) { }
 
-        wasmResponseRaw = isSector ? artModule.solve_sector(input) : artModule.solve(input);
-        console.log("📏 Artifact Calculated!");
+        // Keep Legacy Rust Artifact for Sector
+        let vModule = (window as any).valhallaModule;
+        if (!vModule) vModule = await loadValhalla();
+        // @ts-ignore
+        window.callValhallaBridge = callValhallaBridge;
+        // @ts-ignore
+        window.callValhallaBridgeSync = callValhallaBridgeSync;
+
+        const artModule = await import(/* @vite-ignore */ `${window.location.origin}/artifacts/loxi_sector_artifact.js`);
+        await artModule.default(`${window.location.origin}/artifacts/loxi_sector_artifact_bg.wasm`);
+        wasmResponseRaw = artModule.solve_sector(input);
+      } else if (hash === "loxi_valhalla_v1") {
+        // --- VALHALLA MATRIX (Worker Thread) ---
+        console.log("⚡ Executing Matrix in Disposable Worker...");
+
+        let input = unwrappedPayload;
+        try {
+          // 🧠 AUTO-TRANSFORM: VRP -> Matrix Payload
+          const problem = JSON.parse(unwrappedPayload);
+          if (problem.stops) {
+            console.log("🔄 Transforming VRP Payload for Matrix Worker...");
+            // Extract locations from stops
+            const stops = problem.stops.map((s: any) => s.location);
+            const start = problem.vehicle?.start_location || stops[0];
+            const end = problem.vehicle?.end_location;
+
+            // Build locations array: [Start, ...Stops, End]
+            const locations = [start, ...stops].filter((l: any) => l && typeof l.lat === 'number');
+
+            if (end && (end.lat !== start.lat || end.lon !== start.lon)) {
+              locations.push(end);
+            }
+
+            // Re-package as Matrix Request
+            // FORZAR PEDESTRIAN AQUI TAMBIEN
+            input = JSON.stringify({ locations, costing: "auto" });
+          }
+        } catch (e) { console.warn("Payload transform warning:", e); }
+
+        // @ts-ignore
+        const { runValhallaWorker } = await import('./utils/ValhallaBridge');
+
+        // El worker se encarga de descargar sus propios tiles (Niveles 0, 1, 2)
+        // Gracias a IndexedDB, si ya existen, es instantáneo.
+        const workerResult = await runValhallaWorker(input);
+
+        // SAFETY CHECK: Catch encoded C++ errors that are NOT JSON
+        if (typeof workerResult === 'string' && (workerResult.includes("std::bad_alloc") || workerResult.includes("unordered_map") || workerResult.includes("Valhalla not initialized"))) {
+          addLog(`🚨 Critical: Engine hit a memory boundary (bad_alloc) during Matrix.`, "error");
+          throw new Error(`Valhalla Worker Error: ${workerResult}`);
+        }
+
+        wasmResponseRaw = typeof workerResult === 'string' ? workerResult : JSON.stringify(workerResult);
+
       } else {
         throw new Error(`Unknown Artifact Hash: ${hash}`);
       }
 
-      const wasmResponse = JSON.parse(wasmResponseRaw);
+      // --- PROCESAMIENTO DE RESPUESTA ---
+      let wasmResponse: any;
+      try {
+        wasmResponse = typeof wasmResponseRaw === 'string' ? JSON.parse(wasmResponseRaw) : wasmResponseRaw;
+      } catch (e) {
+        // If it's not JSON, it might be a raw error string from C++
+        if (typeof wasmResponseRaw === 'string' && wasmResponseRaw.includes("bad_alloc")) {
+          wasmResponse = { error: wasmResponseRaw };
+        } else {
+          console.error("JSON Parse Error on WASM response:", wasmResponseRaw);
+          throw new Error("Invalid WASM Response Format");
+        }
+      }
 
       // ERROR HANDLING: WASM Wrapper returns "error" field on failure
       if (wasmResponse.error) {
@@ -473,15 +447,23 @@ function App() {
       const duration = Date.now() - startTime;
       addLog(`✅ Task Complete in ${duration} ms`, "success");
 
+      const sol = wasmResponse.payload
+        ? (typeof wasmResponse.payload === 'string' ? JSON.parse(wasmResponse.payload) : wasmResponse.payload)
+        : wasmResponse;
+
+      setActiveSolutions(prev => ({ ...prev, [lease.auction_id]: sol }));
+
       wsRef.current?.send(JSON.stringify({
         SubmitSolution: {
           auction_id: lease.auction_id,
           worker_id: nodeSpecs.id,
-          result_hash: wasmResponse.hash,
-          cost: wasmResponse.cost,
+          result_hash: wasmResponse.hash || "matrix_generated",
+          cost: wasmResponse.cost || 0,
           unassigned_jobs: wasmResponse.unassigned_jobs || [],
           content_type: "application/json",
           payload: wasmResponse.payload
+            ? (typeof wasmResponse.payload === 'string' ? wasmResponse.payload : JSON.stringify(wasmResponse.payload))
+            : JSON.stringify(wasmResponse)
         }
       }));
 
@@ -500,7 +482,7 @@ function App() {
 
     try {
       addLog(`🚀[COMMAND] Sending problem to Conductor...`, "action");
-      console.log("Sending to Conductor:", JSON.stringify(architectProblem, null, 2));
+      // console.log("Sending to Conductor:", JSON.stringify(architectProblem, null, 2));
 
       const response = await fetch('http://localhost:3007/submit-problem', {
         method: 'POST',
@@ -510,10 +492,47 @@ function App() {
 
       if (response.ok) {
         const result = await response.json();
-        addLog(`✅ Conductor accepted problem(${result.stops} stops)`, "success");
+        const ids = result.auction_ids || [];
+        addLog(`✅ Conductor accepted problem (${result.stops} stops). IDs: ${ids.join(', ')}`, "success");
+
+        // START POLLING FOR SOLUTIONS
+        if (ids.length > 0) {
+          const resolvedIds = new Set<string>();
+          const pollInterval = setInterval(async () => {
+            // Poll all IDs that haven't been resolved yet
+            for (const id of ids) {
+              if (resolvedIds.has(id)) continue;
+
+              try {
+                const solRes = await fetch(`http://localhost:3007/get-solution?auction_id=${id}_solve`);
+                const sol = await solRes.json();
+
+                if (sol.route) {
+                  addLog(`🎉 SOLUTION FOUND for ${id}! Cost: ${sol.cost.toFixed(4)}`, "success");
+                  resolvedIds.add(id);
+                  setActiveSolutions(prev => ({
+                    ...prev,
+                    [id]: sol
+                  }));
+
+                  // If all are resolved, we can stop polling
+                  if (resolvedIds.size === ids.length) {
+                    addLog("🏁 Mission Complete: All partitions optimized.", "success");
+                    clearInterval(pollInterval);
+                  }
+                }
+              } catch (e) {
+                console.warn("Polling error:", e);
+              }
+            }
+          }, 3000);
+
+          // Auto-cleanup after 5 minutes
+          setTimeout(() => clearInterval(pollInterval), 300000);
+        }
       } else {
         const errorText = await response.text();
-        addLog(`❌ Conductor rejected: ${errorText} `, "error");
+        addLog(`❌ Conductor rejected: ${errorText}`, "error");
         console.error("Conductor error:", errorText);
       }
     } catch (e) {
@@ -524,13 +543,9 @@ function App() {
 
   const generateProblem = (count: number) => {
     setActivePayload(null);
-    setActiveSolution(null);
-    // Tile 837 (file: 0/000/837.gph)
-    // Rio Gallegos, Argentina - Moving further west to avoid river and snapping issues
-    const base = { lat: -51.6226, lon: -69.2450 };
+    setActiveSolutions({});
+    const base = { lat: -34.592365579155024, lon: -58.5529111002654 };
 
-    // Create Depot stop explicitly if we want it to show up as a marker easily,
-    // or just let the vehicle handle it.
     const stops = Array.from({ length: count }, (_, i) => ({
       id: `Stop_${i + 1}`,
       location: {
@@ -576,25 +591,31 @@ function App() {
     currentStops = architectProblem.stops;
   }
 
-  // ROBUST ROUTE PARSING
-  let currentRoute: string[] = [];
-  if (activeSolution) {
-    if (activeSolution.routes && activeSolution.routes[0] && activeSolution.routes[0].stops) {
+  // ROBUST MULTI-ROUTE PARSING
+  const currentRoutes: string[][] = Object.values(activeSolutions).map((sol: any) => {
+    let route: string[] = [];
+    if (sol.routes && sol.routes[0] && sol.routes[0].stops) {
       // Standard VRP format: routes[0].stops = [{id: "Stop_1"}, ...]
-      currentRoute = activeSolution.routes[0].stops.map((s: any) => typeof s === 'string' ? s : s.id);
-    } else if (activeSolution.route) {
+      route = sol.routes[0].stops.map((s: any) => typeof s === 'string' ? s : s.id);
+    } else if (sol.route) {
       // Simple array format
-      currentRoute = activeSolution.route.map((s: any) => typeof s === 'string' ? s : s.id);
+      route = sol.route.map((s: any) => typeof s === 'string' ? s : s.id);
     }
     // Ensure we have IDs, filter out undefined
-    currentRoute = currentRoute.filter(id => id && typeof id === 'string');
-  }
+    return route.filter(id => id && typeof id === 'string');
+  }).filter(r => r.length > 0);
+
+  const totalCost = Object.values(activeSolutions).reduce((acc: number, sol: any) => acc + (sol.cost || 0), 0);
+  const hasSolutions = Object.keys(activeSolutions).length > 0;
+
+  const totalPartitions = architectProblem?.stops?.length > nodeSpecs?.thread_count ? Math.ceil(architectProblem.stops.length / 25) : 1; // Simplistic estimation for UI
+  const idsResolved = Object.keys(activeSolutions).filter(id => id.includes('_solve') || id.includes('single_')).length;
 
   return (
     <div className="container">
       <header className="header">
         <div className="logo">LOXI // SWARM HUB</div>
-        <div className={`status - badge ${status.toLowerCase()} `}>{status}</div>
+        <div className={`status-badge ${status.toLowerCase()}`}>{status} {idsResolved > 0 && `(${idsResolved}/${totalPartitions})`}</div>
       </header>
 
       <main className="dashboard">
@@ -668,21 +689,22 @@ function App() {
             <div className="map-title" style={{ background: 'rgba(15, 23, 42, 0.9)', padding: '10px 20px', borderRadius: '8px', border: '1px solid rgba(148, 163, 184, 0.1)', backdropFilter: 'blur(8px)', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}>
               <h2 style={{ margin: 0, fontSize: '1rem', color: '#f8fafc', pointerEvents: 'auto' }}>
                 {activeLease ? `🛰️ PROCESSING MISSION: ${activeLease.task_type} ` :
-                  activeSolution ? "🚩 OPTIMIZATION COMPLETE" :
+                  hasSolutions ? "🚩 OPTIMIZATION COMPLETE" :
                     architectProblem ? "📋 MISSION PREVIEW (DRAFT)" : "🔭 SWARM LISTENING..."}
               </h2>
             </div>
-            {activeSolution && activeSolution.cost != null &&
+            {totalCost > 0 &&
               <div className="cost-tag" style={{ background: '#10b981', color: '#fff', padding: '6px 12px', borderRadius: '4px', fontWeight: 'bold', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}>
-                Efficiency: {activeSolution.cost.toFixed(1)}
+                Total Efficiency: {totalCost.toFixed(1)}
               </div>
             }
           </div>
 
           {(architectProblem || activePayload) ? (
+            // Leaflet Map with Real Routes
             <LeafletMap
               stops={currentStops}
-              route={currentRoute}
+              routes={currentRoutes}
               vehicle={activePayload ? JSON.parse(activePayload).vehicle : architectProblem?.vehicle}
             />
           ) : (

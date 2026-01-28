@@ -12,7 +12,7 @@ use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 mod auction;
-use auction::AuctionManager;
+use auction::{AuctionManager, AuctionStatus};
 
 // Global State
 type PeerMap = Arc<Mutex<HashMap<String, mpsc::Sender<WsMessage>>>>;
@@ -30,6 +30,47 @@ async fn main() {
     let nodes: NodeRegistry = Arc::new(Mutex::new(HashMap::new()));
     let authorities: AuthorityRegistry = Arc::new(Mutex::new(HashMap::new()));
     let auction_manager: SharedAuctionManager = Arc::new(Mutex::new(AuctionManager::new()));
+
+    // --- BACKGROUND MONITOR: Lease Expiry ---
+    {
+        let manager_monitor = auction_manager.clone();
+        let peers_monitor = peers.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+                let expired = {
+                    let mut mgr = manager_monitor.lock().await;
+                    mgr.check_expired_leases(30000) // 30s Timeout
+                };
+
+                if !expired.is_empty() {
+                    let peers_map = peers_monitor.lock().await;
+                    for (id, req, _posted_by) in expired {
+                        println!(
+                            "♻️  Lease EXPIRED for Task {}. Revoking and Re-broadcasting...",
+                            id
+                        );
+
+                        // Re-broadcast Open Auction by simulating a new RequestLease
+                        let msg = LoxiMessage::RequestLease {
+                            domain_id: "generic_grid".to_string(),
+                            requirement: req,
+                            count: 1,
+                            payload: None, // Payload is fetched from Authority upon winning
+                        };
+
+                        if let Ok(payload_str) = serde_json::to_string(&msg) {
+                            // Broadcast to ALL peers to find a new worker
+                            for (_, tx) in peers_map.iter() {
+                                let _ = tx.send(WsMessage::Text(payload_str.clone())).await;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
 
     while let Ok((stream, addr)) = listener.accept().await {
         tokio::spawn(handle_connection(
@@ -234,29 +275,38 @@ async fn handle_connection(
 
                     LoxiMessage::SubmitSolution(solution) => {
                         let auction_id = solution.auction_id.clone();
-                        let worker_id = solution.worker_id.clone();
                         println!(
                             "🏠 Destination reached: Solution received for task {} (Hash: {})",
                             auction_id, solution.result_hash
                         );
 
-                        // AGNOSTIC RELAY: Send solution only to whoever posted the task
-                        let solution_msg = LoxiMessage::SubmitSolution(solution);
-                        let payload = serde_json::to_string(&solution_msg).unwrap();
+                        // --- FIX: Mark Task as Completed to stop Lease Expiry Monitor ---
+                        {
+                            let mut manager = auction_manager.lock().await;
+                            if let Some(auction) = manager.get_auction_mut(&auction_id) {
+                                auction.status = AuctionStatus::Completed;
+                                println!("✅ Auction {} marked as COMPLETED", auction_id);
+                            }
+                        }
 
-                        let manager = auction_manager.lock().await;
-                        if let Some(auction) = manager.get_auction(&auction_id) {
-                            let poster_id = auction.posted_by.clone();
-                            drop(manager); // Release lock before async operation
-
-                            let peers = peers_map.lock().await;
-                            if let Some(poster_tx) = peers.get(&poster_id) {
-                                let _ = poster_tx.send(WsMessage::Text(payload)).await;
-                                println!("📡 Solution relayed to task poster: {}", poster_id);
+                        let peers = peers_map.lock().await;
+                        if let Some(auction) = auction_manager.lock().await.get_auction(&auction_id)
+                        {
+                            if let Some(poster_tx) = peers.get(&auction.posted_by) {
+                                let relayed_msg = LoxiMessage::SubmitSolution(solution);
+                                let _ = poster_tx
+                                    .send(WsMessage::Text(
+                                        serde_json::to_string(&relayed_msg).unwrap(),
+                                    ))
+                                    .await;
+                                println!(
+                                    "📡 Solution relayed to task poster: {}",
+                                    auction.posted_by
+                                );
                             } else {
                                 println!(
                                     "⚠️ Task poster {} disconnected, solution dropped",
-                                    poster_id
+                                    auction.posted_by
                                 );
                             }
                         } else {

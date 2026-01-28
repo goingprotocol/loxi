@@ -34,7 +34,7 @@ echo "Workers will download tiles from this server."
 echo "Press Ctrl+C to stop"
 echo ""
 
-cd "$TILES_DIR"
+cd "$(dirname "$TILES_DIR")"
 python3 -m http.server 8080 --bind 0.0.0.0 &
 SERVER_PID=$!
 

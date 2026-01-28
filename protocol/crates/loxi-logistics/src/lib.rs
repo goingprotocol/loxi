@@ -21,19 +21,22 @@ impl LoxiArtifact for LogisticsArtifact {
     }
 }
 
+#[cfg(feature = "include_wasm")]
 #[wasm_bindgen]
-pub fn loxi_solve(problem_json: &str) -> Result<String, JsValue> {
+pub fn solve(problem_json: &str) -> Result<String, JsValue> {
     loxi_worker_wrapper::<LogisticsArtifact>(problem_json)
 }
 
+#[cfg(feature = "include_wasm")]
 #[wasm_bindgen]
-pub fn loxi_solve_seeded(problem_json: &str, _seed: u64) -> Result<String, JsValue> {
+pub fn solve_seeded(problem_json: &str, _seed: u64) -> Result<String, JsValue> {
     // In the future, this will configure VrpSolver with the seed
     loxi_worker_wrapper::<LogisticsArtifact>(problem_json)
 }
 
+#[cfg(feature = "include_wasm")]
 #[wasm_bindgen]
-pub fn loxi_refine_seeded(
+pub fn refine_seeded(
     problem_json: &str,
     _solution_json: &str,
     _seed: u64,
@@ -48,6 +51,7 @@ mod tests {
     use wasm_bindgen_test::*;
 
     #[wasm_bindgen_test]
+    #[cfg(feature = "include_wasm")]
     fn test_solve_route() {
         let problem_json = r#"{
             "stops": [
@@ -61,15 +65,15 @@ mod tests {
                 }
             ],
             "vehicle": {
+                "id": "V1",
                 "capacity": 100.0,
                 "start_location": {"lat": 40.0, "lon": -74.0},
-                "end_location": {"lat": 40.0, "lon": -74.0},
                 "shift_window": {"start": 0, "end": 86400},
                 "speed_mps": 10.0
             }
         }"#;
 
-        let result = solve_route(problem_json);
+        let result = solve(problem_json);
         assert!(result.is_ok());
     }
 }

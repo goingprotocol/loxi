@@ -78,6 +78,7 @@ impl Stop {
 pub struct Vehicle {
     pub capacity: f64,
     pub start_location: Location,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub end_location: Option<Location>,
     pub shift_window: TimeWindow,
     pub speed_mps: f64,
@@ -106,6 +107,8 @@ pub struct Problem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_matrix: Option<Vec<Vec<u32>>>,
     pub seed: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solution: Option<Solution>,
 }
 
 fn default_fleet_size() -> usize {
@@ -114,7 +117,15 @@ fn default_fleet_size() -> usize {
 
 impl Problem {
     pub fn new(stops: Vec<Stop>, vehicle: Vehicle) -> Self {
-        Self { stops, vehicle, fleet_size: 1, distance_matrix: None, time_matrix: None, seed: 0 }
+        Self {
+            stops,
+            vehicle,
+            fleet_size: 1,
+            distance_matrix: None,
+            time_matrix: None,
+            seed: 0,
+            solution: None,
+        }
     }
 
     pub fn distance(&self, from_idx: usize, to_idx: usize) -> f64 {
@@ -195,13 +206,28 @@ impl SolutionMetadata {
     }
 }
 
+impl Default for SolutionMetadata {
+    fn default() -> Self {
+        Self {
+            solver_version: "unknown".to_string(),
+            solve_time_ms: 0,
+            seed: None,
+            iterations: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Solution {
     pub route: Vec<String>,
+    #[serde(default)]
     pub unassigned_jobs: Vec<String>,
     pub cost: f64,
+    #[serde(default)]
     pub cost_breakdown: CostBreakdown,
+    #[serde(default)]
     pub violations: Vec<Violation>,
+    #[serde(default)]
     pub metadata: SolutionMetadata,
 }
 

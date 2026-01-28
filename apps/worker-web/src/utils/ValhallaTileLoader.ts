@@ -1,7 +1,4 @@
-/**
- * Dynamic Valhalla Tile Loader
- * Downloads only the tiles needed for a specific geographic region
- */
+// valhallaTilesLoader.ts
 
 export interface BoundingBox {
     minLat: number;
@@ -16,7 +13,36 @@ export interface TileCoord {
     y: number;
 }
 
-// Global flag to prevent double initialization of the WASM engine
+// ------------------------------------------------------------------
+// 1. UTILIDADES MATEMÁTICAS
+// ------------------------------------------------------------------
+
+export function calculateBoundingBox(locations: Array<{ lat: number; lon: number }>, paddingKm: number = 20): BoundingBox {
+    if (locations.length === 0) throw new Error('Empty location list');
+    let minLat = locations[0].lat, maxLat = locations[0].lat, minLon = locations[0].lon, maxLon = locations[0].lon;
+
+    for (const loc of locations) {
+        minLat = Math.min(minLat, loc.lat); maxLat = Math.max(maxLat, loc.lat);
+        minLon = Math.min(minLon, loc.lon); maxLon = Math.max(maxLon, loc.lon);
+    }
+
+    // 1 grado latitud ~= 111km.
+    const paddingDeg = paddingKm / 111;
+
+    return {
+        minLat: minLat - paddingDeg,
+        maxLat: maxLat + paddingDeg,
+        minLon: minLon - paddingDeg,
+        maxLon: maxLon + paddingDeg
+    };
+}
+
+export function getTileIdFromCoord(lat: number, lon: number, level: number): TileCoord {
+    const tileSize = level === 2 ? 0.25 : level === 1 ? 1.0 : 4.0;
+    const x = Math.floor((lon + 180) / tileSize);
+    const y = Math.floor((lat + 90) / tileSize);
+    return { level, x, y };
+}
 
 export function calculateRequiredTiles(bbox: BoundingBox, level: number = 0): TileCoord[] {
     const tiles: TileCoord[] = [];
@@ -40,9 +66,6 @@ export function tileToPath(tile: TileCoord): string {
     const nColumns = Math.floor(360 / tileSize);
     const tileId = (tile.y * nColumns) + tile.x;
 
-    // Valhalla hierarchical structure varies by level in this dataset
-    // Level 2: Nested (Level/Dir1/Dir2/File.gph)
-    // Level 0/1: Flat (Level/Bucket/File.gph)
     if (tile.level === 2) {
         const bucketId = Math.floor(tileId / 1000);
         const dir1 = Math.floor(bucketId / 1000).toString().padStart(3, '0');
@@ -58,7 +81,7 @@ export function tileToPath(tile: TileCoord): string {
 
 export async function downloadTile(tile: TileCoord, tileServerUrl: string = 'http://localhost:8080'): Promise<ArrayBuffer> {
     const tilePath = tileToPath(tile);
-    const url = `${tileServerUrl}/${tilePath}`;
+    const url = `${tileServerUrl}/valhalla_tiles/${tilePath}`;
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Failed to download tile ${tilePath}: ${response.statusText}`);
     return response.arrayBuffer();
@@ -68,6 +91,8 @@ export function loadTileIntoMEMFS(module: any, tile: TileCoord, data: ArrayBuffe
     if (!module || !module.FS) throw new Error('Valhalla module FS not available.');
     const tilePath = tileToPath(tile);
     const fullPath = `/valhalla_tiles/${tilePath}`;
+
+    // Crear directorios recursivamente
     const parts = fullPath.split('/');
     let currentPath = '';
     for (let i = 0; i < parts.length - 1; i++) {
@@ -78,45 +103,32 @@ export function loadTileIntoMEMFS(module: any, tile: TileCoord, data: ArrayBuffe
         try { module.FS.mkdir(currentPath); } catch (e) { }
     }
     module.FS.writeFile(fullPath, new Uint8Array(data));
-    console.log(`✅ Loaded tile into MEMFS: ${fullPath}`);
 }
+
+// ------------------------------------------------------------------
+// 2. CACHÉ (IndexedDB)
+// ------------------------------------------------------------------
 
 class TileCache {
     private dbName = 'valhalla-tiles';
     private storeName = 'tiles';
     private db: IDBDatabase | null = null;
-
-    // Increment this version to force all clients to delete their old cache and re-download
-    private CACHE_VERSION = 'v4-argentina-fix';
+    private CACHE_VERSION = 'v6-smart-load'; // Incrementado
 
     async init(): Promise<void> {
         if (this.db) return Promise.resolve();
-
-        // 1. Check for version mismatch and clear if needed
         const storedVersion = localStorage.getItem('valhalla_tile_cache_version');
         if (storedVersion !== this.CACHE_VERSION) {
-            console.log(`🧹 Cache Mismatch (Old: ${storedVersion}, New: ${this.CACHE_VERSION}). Purging IndexedDB...`);
+            console.log(`🧹 Cache Mismatch. Purging...`);
             await new Promise<void>((resolve) => {
                 const req = indexedDB.deleteDatabase(this.dbName);
-                req.onerror = () => { console.warn("Failed to delete old DB", req.error); resolve(); };
-                req.onsuccess = () => {
-                    console.log("✅ Old cache deleted.");
-                    localStorage.setItem('valhalla_tile_cache_version', this.CACHE_VERSION);
-                    resolve();
-                };
-                req.onblocked = () => {
-                    console.warn("⚠️ DB Delete blocked! Close other tabs.");
-                    resolve();
-                };
+                req.onsuccess = () => { localStorage.setItem('valhalla_tile_cache_version', this.CACHE_VERSION); resolve(); };
+                req.onerror = () => resolve();
             });
         }
-
         return new Promise((resolve, reject) => {
             const request = indexedDB.open(this.dbName, 1);
-            request.onerror = () => {
-                console.error("IndexedDB Open Error:", request.error);
-                reject(request.error);
-            };
+            request.onerror = () => reject(request.error);
             request.onsuccess = () => { this.db = request.result; resolve(); };
             request.onupgradeneeded = (event) => {
                 const db = (event.target as IDBOpenDBRequest).result;
@@ -127,59 +139,82 @@ class TileCache {
 
     async get(key: string): Promise<ArrayBuffer | null> {
         if (!this.db) await this.init();
-        return new Promise((resolve, reject) => {
-            const transaction = this.db!.transaction([this.storeName], 'readonly');
-            const store = transaction.objectStore(this.storeName);
-            const request = store.get(key);
-            request.onerror = () => reject(request.error);
-            request.onsuccess = () => resolve(request.result || null);
+        return new Promise((resolve) => {
+            const tx = this.db!.transaction([this.storeName], 'readonly');
+            const req = tx.objectStore(this.storeName).get(key);
+            req.onsuccess = () => resolve(req.result || null);
+            req.onerror = () => resolve(null);
         });
     }
 
     async set(key: string, value: ArrayBuffer): Promise<void> {
         if (!this.db) await this.init();
-        return new Promise((resolve, reject) => {
-            const transaction = this.db!.transaction([this.storeName], 'readwrite');
-            const store = transaction.objectStore(this.storeName);
-            const request = store.put(value, key);
-            request.onerror = () => reject(request.error);
-            request.onsuccess = () => resolve();
+        return new Promise((resolve) => {
+            const tx = this.db!.transaction([this.storeName], 'readwrite');
+            const req = tx.objectStore(this.storeName).put(value, key);
+            req.onsuccess = () => resolve();
+            req.onerror = () => resolve();
         });
     }
 }
-
 const tileCache = new TileCache();
 
-export async function loadTilesForRegion(
+// ------------------------------------------------------------------
+// 3. CARGA INTELIGENTE (LA ESTRATEGIA SÁNDWICH) 🥪
+// ------------------------------------------------------------------
+
+// NOTA: Renombré 'loadTilesForRegion' a 'loadSmartTiles' para que sepas cual es la nueva
+export async function loadSmartTiles(
     module: any,
-    bbox: BoundingBox,
+    locations: Array<{ lat: number; lon: number }>,
     tileServerUrl: string = 'http://localhost:8080',
     onProgress?: (loaded: number, total: number) => void
 ): Promise<void> {
+
     if (module && !module.FS) {
-        console.log("⏳ Waiting for Valhalla FS to be ready...");
         let attempts = 0;
-        while (!module.FS && attempts < 100) {
-            await new Promise(resolve => setTimeout(resolve, 50));
-            attempts++;
+        while (!module.FS && attempts < 100) { await new Promise(r => setTimeout(r, 50)); attempts++; }
+    }
+
+    // A. Calcular Caja Global con 20km de padding para Rutas/Autopistas
+    const bbox = calculateBoundingBox(locations, 20);
+
+    let tilesToDownload: TileCoord[] = [];
+    const uniqueKeys = new Set<string>();
+
+    const addTile = (t: TileCoord) => {
+        const key = `${t.level}-${t.x}-${t.y}`;
+        if (!uniqueKeys.has(key)) {
+            uniqueKeys.add(key);
+            tilesToDownload.push(t);
         }
-    }
+    };
 
-    // 1. Setup Robust FS Structure & Config (Deferred until after tile load check)
-    // await initializeValhallaConfig(module, tileServerUrl); 
+    // PASO 1: Descargar Nivel 0 y 1 (Red Troncal) para TODO el viaje
+    [0, 1].forEach(level => {
+        calculateRequiredTiles(bbox, level).forEach(addTile);
+    });
 
+    // PASO 2: Descargar Nivel 2 (Calles) SOLO donde hay paradas (+ vecinos)
+    locations.forEach(loc => {
+        const centerTile = getTileIdFromCoord(loc.lat, loc.lon, 2);
+        // Bajamos matriz de 3x3 tiles alrededor de la parada
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                addTile({ level: 2, x: centerTile.x + dx, y: centerTile.y + dy });
+            }
+        }
+    });
 
-    // 2. Load Tiles (Hierarchy: 0=Highway, 1=Arterial, 2=Local)
-    const levels = [0, 1, 2];
-    let allTiles: TileCoord[] = [];
-
-    for (const level of levels) {
-        allTiles = allTiles.concat(calculateRequiredTiles(bbox, level));
-    }
-
-    console.log(`📦 Loading ${allTiles.length} tiles for region...`);
+    console.log(`📦 Estrategia Smart: Se cargarán ${tilesToDownload.length} tiles.`);
+    console.log("📍 Puntos a cubrir:", locations.length);
+    console.log("🗺️ BBox detectado:", bbox);
+    console.log("📂 Tiles calculados:", tilesToDownload.map(t =>
+        `L${t.level}: ${t.x}/${t.y} (Path: ${tileToPath(t)})`
+    ));
+    // PASO 3: Ejecutar carga
     let loaded = 0;
-    for (const tile of allTiles) {
+    for (const tile of tilesToDownload) {
         const tilePath = tileToPath(tile);
         let tileData = await tileCache.get(tilePath);
         if (!tileData) {
@@ -187,384 +222,306 @@ export async function loadTilesForRegion(
                 tileData = await downloadTile(tile, tileServerUrl);
                 await tileCache.set(tilePath, tileData);
             } catch (e) {
-                console.error(`❌ Tile download failed ${tilePath}:`, e);
+                console.warn(`⚠️ Tile faltante: ${tilePath} (Ignorando)`);
                 continue;
             }
         }
         loadTileIntoMEMFS(module, tile, tileData!);
         loaded++;
-        onProgress?.(loaded, allTiles.length);
+        onProgress?.(loaded, tilesToDownload.length);
     }
 
-    // 3. Determine if we have Level 2 tiles
-    // We check if we actually put any Level 2 tiles into FS or if we found them valid
-    const level2Available = allTiles.some(t => t.level === 2 && module.FS.analyzePath(`/valhalla_tiles/${tileToPath(t)}`).exists);
+    console.log("🔍 AUDITORÍA DE TILES EN MEMORIA (VFS):");
+    let missingCount = 0;
 
-    console.log(`🧠 Level 2 availability check: ${level2Available ? "✅ Available" : "❌ Not found (will disable in config)"}`);
+    for (const tile of tilesToDownload) {
+        const path = `/valhalla_tiles/${tileToPath(tile)}`;
+        try {
+            // Preguntamos al sistema de archivos de WASM si el archivo existe
+            const stat = module.FS.stat(path);
+            if (stat.size < 100) {
+                console.warn(`⚠️ Tile corrupto o vacío: ${path} (${stat.size} bytes)`);
+            }
+        } catch (e) {
+            console.error(`❌ TILE FALTANTE CRÍTICO: ${path}`);
+            missingCount++;
+        }
+    }
 
-    // 4. Initialize Config with dynamic Level 2 support
-    await initializeValhallaConfig(module, tileServerUrl, level2Available);
+    if (missingCount === 0) {
+        console.log(`✅ Todos los ${tilesToDownload.length} tiles están correctamente escritos en memoria.`);
+    } else {
+        console.error(`🚨 FALTAN ${missingCount} TILES. Valhalla va a fallar.`);
+    }
 
-    // 5. Finalizing Valhalla Initialization
+    // PASO 4: Inicializar con Configuración Eficiente
+    await initializeValhallaConfig(module);
     await initializeValhallaEngine(module);
-
 }
 
-export async function initializeValhallaConfig(module: any, tileServerUrl: string, enableLevel2: boolean = true): Promise<void> {
-    // 1. Setup Base FS Structure
+// ------------------------------------------------------------------
+// 4. CONFIGURACIÓN "ECO-FRIENDLY" (Eficiente) 🌿
+// ------------------------------------------------------------------
+
+function getGoldenTemplate() {
+    const efficientHierarchy = {
+        "expand_within_distance": { "0": 5000000.0, "1": 50000.0, "2": 5000.0 },
+        "max_up_transitions": { "1": 500, "2": 100 }
+    };
+    return {
+        "additional_data": {},
+        "httpd": {
+            "service": {
+                "drain_seconds": 28,
+                "interrupt": "ipc:///tmp/interrupt",
+                "listen": "tcp://*:8002",
+                "loopback": "ipc:///tmp/loopback",
+                "shutdown_seconds": 1,
+                "timeout_seconds": -1
+            }
+        },
+        "loki": {
+            "actions": ["locate", "route", "status", "tile"],
+            "logging": {
+                "color": true,
+                "file_name": "path_to_some_file.log",
+                "long_request": 100.0,
+                "type": "std_out"
+            },
+            "service": { "proxy": "ipc:///tmp/loki" },
+            "service_defaults": {
+                "heading_tolerance": 60,
+                "minimum_reachability": 50,
+                "mvt_cache_min_zoom": 11,
+                "mvt_min_zoom_road_class": [7, 7, 8, 11, 11, 12, 13, 14],
+                "node_snap_tolerance": 5,
+                "radius": 200,
+                "search_cutoff": 35000,
+                "street_side_max_distance": 1000,
+                "street_side_tolerance": 5
+            },
+            "use_connectivity": true
+        },
+        "meili": {
+            "auto": { "search_radius": 50, "turn_penalty_factor": 200 },
+            "bicycle": { "turn_penalty_factor": 140 },
+            "customizable": ["mode", "search_radius", "turn_penalty_factor", "gps_accuracy", "interpolation_distance", "sigma_z", "beta", "max_route_distance_factor", "max_route_time_factor"],
+            "default": {
+                "beta": 3,
+                "breakage_distance": 2000,
+                "geometry": false,
+                "gps_accuracy": 5.0,
+                "interpolation_distance": 10,
+                "max_route_distance_factor": 5,
+                "max_route_time_factor": 5,
+                "max_search_radius": 100,
+                "route": true,
+                "search_radius": 50,
+                "sigma_z": 4.07,
+                "turn_penalty_factor": 0
+            },
+            "grid": { "cache_size": 100240, "size": 500 },
+            "logging": { "color": true, "file_name": "path_to_some_file.log", "type": "std_out" },
+            "mode": "auto",
+            "multimodal": { "turn_penalty_factor": 70 },
+            "pedestrian": { "search_radius": 50, "turn_penalty_factor": 100 },
+            "service": { "proxy": "ipc:///tmp/meili" },
+            "verbose": false
+        },
+        "mjolnir": {
+            // 🛑 LIMPIEZA: Quitamos admin, timezone, tile_extract, traffic_extract
+            // Solo dejamos la configuración de procesamiento y directorios válidos
+            "data_processing": {
+                "allow_alt_name": false,
+                "apply_country_overrides": true,
+                "grid_divisions_within_tile": 32,
+                "infer_internal_intersections": true,
+                "infer_turn_channels": true,
+                "scan_tar": false,
+                "use_admin_db": false,
+                "use_direction_on_ways": false,
+                "use_rest_area": false,
+                "use_urban_tag": false
+            },
+            "global_synchronized_cache": false,
+            "hierarchy": true,
+            "id_table_size": 13000000,
+            "import_bike_share_stations": false,
+            "include_bicycle": true,
+            "include_construction": false,
+            "include_driveways": true,
+            "include_driving": true,
+            "include_pedestrian": true,
+            "include_platforms": false,
+            "keep_all_osm_node_ids": false,
+            "keep_osm_node_ids": false,
+            "logging": { "color": true, "file_name": "path_to_some_file.log", "type": "std_out" },
+            "lru_mem_cache_hard_control": false,
+            "max_cache_size": 1000000000,
+            "max_concurrent_reader_users": 1,
+            "reclassify_links": true,
+            "shortcuts": true,
+            "tile_dir": "/valhalla_tiles",
+            // "tile_extract": "", // Eliminado
+            // "admin": "", // Eliminado
+            // "timezone": "", // Eliminado
+            "transit_dir": "/data/valhalla/transit", // Puede quedarse si está vacío
+            "transit_feeds_dir": "/data/valhalla/transit_feeds",
+            "transit_pbf_limit": 20000,
+            "use_lru_mem_cache": false,
+            "use_simple_mem_cache": false
+        },
+        "odin": {
+            "logging": { "color": true, "file_name": "path_to_some_file.log", "type": "std_out" },
+            "markup_formatter": {
+                "markup_enabled": false,
+                "phoneme_format": "<TEXTUAL_STRING> (<span class=<QUOTES>phoneme<QUOTES>>/<VERBAL_STRING>/</span>)"
+            },
+            "service": { "proxy": "ipc:///tmp/odin" }
+        },
+        "service_limits": {
+            "allow_hard_exclusions": false,
+            "auto": { "max_distance": 5000000.0, "max_locations": 20, "max_matrix_distance": 400000.0, "max_matrix_location_pairs": 2500 },
+            "bicycle": { "max_distance": 500000.0, "max_locations": 50, "max_matrix_distance": 200000.0, "max_matrix_location_pairs": 2500 },
+            "bikeshare": { "max_distance": 500000.0, "max_locations": 50, "max_matrix_distance": 200000.0, "max_matrix_location_pairs": 2500 },
+            "bus": { "max_distance": 5000000.0, "max_locations": 50, "max_matrix_distance": 400000.0, "max_matrix_location_pairs": 2500 },
+            "centroid": { "max_distance": 200000.0, "max_locations": 5 },
+            "hierarchy_limits": {
+                "allow_modification": false,
+                "bidirectional_astar": {
+                    "max_allowed_up_transitions": efficientHierarchy.max_up_transitions,
+                    "max_expand_within_distance": efficientHierarchy.expand_within_distance
+                },
+                "costmatrix": {
+                    "max_allowed_up_transitions": efficientHierarchy.max_up_transitions,
+                    "max_expand_within_distance": efficientHierarchy.expand_within_distance
+                },
+                "unidirectional_astar": {
+                    "max_allowed_up_transitions": efficientHierarchy.max_up_transitions,
+                    "max_expand_within_distance": efficientHierarchy.expand_within_distance
+                },
+                "matrix": {
+                    "max_distance": 50000000.0,
+                    "max_locations": 10000,
+                    "max_matrix_distance": 50000000.0,
+                    "max_matrix_location_pairs": 100000000
+                },
+            },
+            "isochrone": { "max_contours": 4, "max_distance": 25000.0, "max_distance_contour": 200, "max_locations": 1, "max_time_contour": 120 },
+            "max_alternates": 2,
+            "max_distance_disable_hierarchy_culling": 0,
+            "max_exclude_locations": 50,
+            "max_exclude_polygons_length": 10000,
+            "max_linear_cost_edges": 50000,
+            "max_radius": 200,
+            "max_reachability": 100,
+            "max_timedep_distance": 500000,
+            "max_timedep_distance_matrix": 0,
+            "min_linear_cost_factor": 1,
+            "motor_scooter": { "max_distance": 500000.0, "max_locations": 50, "max_matrix_distance": 200000.0, "max_matrix_location_pairs": 2500 },
+            "motorcycle": { "max_distance": 500000.0, "max_locations": 50, "max_matrix_distance": 200000.0, "max_matrix_location_pairs": 2500 },
+            "multimodal": { "max_distance": 500000.0, "max_locations": 50, "max_matrix_distance": 0.0, "max_matrix_location_pairs": 0 },
+            "pedestrian": { "max_distance": 250000.0, "max_locations": 50, "max_matrix_distance": 200000.0, "max_matrix_location_pairs": 2500, "max_transit_walking_distance": 10000, "min_transit_walking_distance": 1 },
+            "skadi": { "max_shape": 750000, "min_resample": 10.0 },
+            "status": { "allow_verbose": false },
+            "taxi": { "max_distance": 5000000.0, "max_locations": 20, "max_matrix_distance": 400000.0, "max_matrix_location_pairs": 2500 },
+            "trace": { "max_alternates": 3, "max_alternates_shape": 100, "max_distance": 200000.0, "max_gps_accuracy": 100.0, "max_search_radius": 100.0, "max_shape": 16000 },
+            "transit": { "max_distance": 500000.0, "max_locations": 50, "max_matrix_distance": 200000.0, "max_matrix_location_pairs": 2500 },
+            "truck": { "max_distance": 5000000.0, "max_locations": 20, "max_matrix_distance": 400000.0, "max_matrix_location_pairs": 2500 }
+        },
+        "statsd": { "port": 8125, "prefix": "valhalla" },
+        "thor": {
+            "bidirectional_astar": {
+                "alternative_cost_extend": 1.2,
+                "alternative_iterations_delta": 100000,
+                "hierarchy_limits": {
+                    "expand_within_distance": efficientHierarchy.expand_within_distance,
+                    "max_up_transitions": efficientHierarchy.max_up_transitions
+                },
+                "threshold_delta": 420.0
+            },
+            "clear_reserved_memory": false,
+            "costmatrix": {
+                "allow_second_pass": false,
+                "check_reverse_connection": true,
+                "hierarchy_limits": efficientHierarchy.expand_within_distance,
+                "max_iterations": 2800,
+                "max_reserved_locations": 25,
+                "min_iterations": 100
+            },
+            "extended_search": false,
+            "logging": { "color": true, "file_name": "path_to_some_file.log", "long_request": 110.0, "type": "std_out" },
+            "max_reserved_labels_count_astar": 2000000,
+            "max_reserved_labels_count_bidir_astar": 1000000,
+            "max_reserved_labels_count_bidir_dijkstras": 2000000,
+            "max_reserved_labels_count_dijkstras": 4000000,
+            "service": { "proxy": "ipc:///tmp/thor" },
+            "source_to_target_algorithm": "select_optimal",
+            "unidirectional_astar": {
+                "hierarchy_limits": {
+                    "expand_within_distance": efficientHierarchy.expand_within_distance,
+                    "max_up_transitions": efficientHierarchy.max_up_transitions
+                }
+            }
+        }
+    };
+}
+// ------------------------------------------------------------------
+// 5. INICIALIZACIÓN
+// ------------------------------------------------------------------
+
+export async function initializeValhallaConfig(module: any): Promise<void> {
     try {
         ['/valhalla_tiles', '/valhalla_tiles/0', '/valhalla_tiles/1', '/valhalla_tiles/2'].forEach(dir => {
-            if (!module.FS.analyzePath(dir).exists) {
-                module.FS.mkdir(dir);
-            }
+            if (!module.FS.analyzePath(dir).exists) module.FS.mkdir(dir);
         });
     } catch (e) { }
 
     const template = getGoldenTemplate();
+    const config = JSON.parse(JSON.stringify(template));
 
-    // DEEP MERGE STRATEGY: WASM-Friendly
-    // We start with the golden template and IGNORE complex server config for stability.
-    const config = JSON.parse(JSON.stringify(template)); // Deep clone
-
-    // WASM Specific Overrides (Non-negotiable)
-    config.mjolnir = config.mjolnir || {};
-    config.mjolnir.tile_dir = "/valhalla_tiles";
-
-    // Explicitly remove paths to files that definitely don't exist in VFS
-    // This prevents "stat: No such file or directory" errors during init
-    delete config.mjolnir.admin;
-    delete config.mjolnir.timezone;
-    delete config.mjolnir.elevation;
-    delete config.mjolnir.transit_dir;
-    delete config.mjolnir.tile_extract; // Important: Empty string can cause stat errors
-    delete config.mjolnir.traffic_extract;
-
-    // Scrub all potential /data/ or absolute paths that might break WASM readdir/stat
-    const scrub = (obj: any) => {
-        for (const key in obj) {
-            if (typeof obj[key] === 'string') {
-                const val = obj[key] as string;
-                if (val.startsWith('/') || val.includes(':/')) {
-                    // Normalize our VFS paths, delete others
-                    if (val.startsWith('/valhalla_tiles') || val === '/valhalla.json') {
-                        // Keep but ensure safe
-                    } else {
-                        delete obj[key];
-                    }
-                }
-            } else if (typeof obj[key] === 'object' && obj[key] !== null) {
-                scrub(obj[key]);
-            }
-        }
-    };
-    scrub(config);
-
-    // Force specific algorithms and flags for stability in WASM
-    if (!config.mjolnir) config.mjolnir = {};
-    config.mjolnir.tile_dir = "/valhalla_tiles/"; // Trailing slash for stability
-    // config.mjolnir.tile_extract = "";
-    config.mjolnir.hierarchy = true;
-
-    // Set safe memory constraints for browser WASM
-    config.mjolnir.max_cache_size = 120000000; // 120MB
-    config.mjolnir.id_table_size = 100000000;
-
-    // Level 2 is enabled provided the tiles exist
-    if (!enableLevel2) {
-        if (config.thor?.bidirectional_astar?.hierarchy_limits?.expand_within_distance) {
-            delete config.thor.bidirectional_astar.hierarchy_limits.expand_within_distance["2"];
-        }
-        if (config.thor?.unidirectional_astar?.hierarchy_limits?.expand_within_distance) {
-            delete config.thor.unidirectional_astar.hierarchy_limits.expand_within_distance["2"];
-        }
-        if (config.thor?.costmatrix?.hierarchy_limits?.expand_within_distance) {
-            delete config.thor.costmatrix.hierarchy_limits.expand_within_distance["2"];
-        }
+    // Limpieza de paths
+    delete (config.mjolnir as any).admin;
+    delete (config.mjolnir as any).timezone;
+    delete (config.mjolnir as any).elevation;
+    delete (config.mjolnir as any).tile_extract;
+    delete (config.mjolnir as any).traffic_extract;
+    // 🧹 LIMPIEZA DE MEMORIA: Borramos el archivo viejo si existe
+    try {
+        module.FS.unlink('/valhalla.json');
+        console.log("🧹 Configuración antigua borrada.");
+    } catch (e) {
+        // Si no existe, no pasa nada
     }
 
-    // Force basic logging to console
-    const logSection = { type: "std_out", color: true };
-    config.mjolnir.logging = logSection;
-    if (config.thor) config.thor.logging = logSection;
-    if (config.loki) config.loki.logging = logSection;
-
-    const configStr = JSON.stringify(config);
-    module.FS.writeFile('/valhalla.json', configStr);
-    console.log("📝 JIT Config (Scrubbed) written to VFS. Size:", configStr.length);
+    module.FS.writeFile('/valhalla.json', JSON.stringify(config));
+    console.log("📝 Configuración escrita en VFS.");
 }
 
 export async function initializeValhallaEngine(module: any): Promise<void> {
-    // 1. Double check FS readiness
-    if (!module || !module.FS) {
-        console.warn("⚠️ Valhalla FS not yet available for engine init.");
-        return;
-    }
+    if (module.valhallaInitialized) return;
 
-    // 2. Load the config we just wrote
-    let currentConfigStr = "";
     try {
-        currentConfigStr = module.FS.readFile('/valhalla.json', { encoding: 'utf8' });
-    } catch (e) {
-        console.error("❌ Critical: /valhalla.json could not be read before init!");
-        throw new Error("Valhalla config file missing or unreadable in VFS");
-    }
-
-    // 3. JS-side Check: Has anything changed?
-    if (module.valhallaInitialized && module.lastConfigStr === currentConfigStr) {
-        // Test probe (Buenos Aires)
-        try {
-            const dummyInput = JSON.stringify({ locations: [{ lat: -34.6037, lon: -58.3816 }, { lat: -34.6040, lon: -58.3820 }], costing: "auto" });
-            const probeRes = module.ccall("valhalla_matrix", "string", ["string"], [dummyInput]);
-            if (typeof probeRes === 'string' && !probeRes.includes("Valhalla not initialized")) {
-                console.log("✔️ Valhalla Engine alive and config is identical. Skipping re-init.");
-                return;
-            }
-        } catch (e) { }
-    }
-
-    // 4. Check if we have at least SOME tiles before initializing
-    try {
-        const levels = [0, 1, 2];
-        levels.forEach(lvl => {
-            try {
-                const path = `/valhalla_tiles/${lvl}`;
-                if (module.FS.analyzePath(path).exists) {
-                    const files = module.FS.readdir(path);
-                    console.log(`📂 Level ${lvl} subdirs: ${files.length - 2}`);
-                }
-            } catch (e) { }
-        });
-    } catch (e) { }
-
-    // 5. Initialization Attempt
-    try {
-        console.log("🏾 Initializing Valhalla Engine (JIT Mode)...");
-        console.log(`📡 Config target: /valhalla.json`);
-
+        console.log("🔌 Inicializando Motor Valhalla...");
         // @ts-ignore
-        const result = module.ccall(
-            "init_valhalla",
-            "number",
-            ["string"],
-            ["/valhalla.json"]
-        );
+        const result = module.ccall("init_valhalla", "number", ["string"], ["/valhalla.json"]);
 
         if (result === 0) {
-            console.log(`✅ Valhalla Engine Initialized Successfully!`);
+            console.log(`✅ Valhalla Inicializado (Code 0)`);
             module.valhallaInitialized = true;
-            module.lastConfigStr = currentConfigStr;
         } else {
-            // Code non-zero is an error in this bridge
-            console.warn(`❌ Valhalla Init returned error code: ${result}. Probing for life...`);
-
-            const dummyInput = JSON.stringify({ locations: [{ lat: -34.6037, lon: -58.3816 }, { lat: -34.6040, lon: -58.3820 }], costing: "auto" });
-            const probeRes = module.ccall("valhalla_matrix", "string", ["string"], [dummyInput]);
-
-            if (typeof probeRes === 'string' && !probeRes.includes("Valhalla not initialized") && !probeRes.includes("error")) {
-                console.log("✅ Probe Succeeded despite error code. Engine is responsive.");
+            // Probe de vida
+            const dummy = JSON.stringify({ locations: [{ lat: -34.6, lon: -58.4 }, { lat: -34.61, lon: -58.41 }], costing: "auto" });
+            const res = module.ccall("valhalla_matrix", "string", ["string"], [dummy]);
+            if (!res.includes("Valhalla not initialized")) {
+                console.log("✅ El motor responde correctamente.");
                 module.valhallaInitialized = true;
-                module.lastConfigStr = currentConfigStr;
-                return;
+            } else {
+                throw new Error(`Fallo crítico: ${res}`);
             }
-
-            console.error("🕵️ Probe Response (after error):", probeRes);
-            console.error("🛠️ Config used was:", currentConfigStr);
-            throw new Error(`Valhalla initialization failed with code ${result}. Engine says: ${probeRes}`);
         }
-    } catch (e: any) {
-        console.error("❌ Failed to initialize Valhalla engine:", e);
+    } catch (e) {
+        console.error("❌ Error fatal iniciando Valhalla:", e);
         throw e;
     }
 }
-
-// ------------------------------------------------------------------
-// Golden Template: Configuración 1:1 Exhaustiva (Basada en Loxi Production)
-// ------------------------------------------------------------------
-function getGoldenTemplate() {
-    return {
-        "mjolnir": {
-            "tile_dir": "/valhalla_tiles",
-            "hierarchy": true,
-            "id_table_size": 13000000,
-            "max_cache_size": 1000000000,
-            "data_processing": {
-                "use_admin_db": false,
-                "use_urban_tag": false,
-                "use_rest_area": false
-            },
-            "logging": {
-                "type": "std_out",
-                "color": true
-            }
-        },
-        "loki": {
-            "actions": [
-                "locate",
-                "route",
-                "sources_to_targets",  // <--- Matriz (Vital)
-                "optimized_route",     // <--- VRP/TSP (Vital)
-                "isochrone"
-            ],
-            "use_connectivity": true,
-            "service_defaults": {
-                "radius": 0,
-                "minimum_reachability": 50,
-                "search_cutoff": 35000,
-                "node_snap_tolerance": 5,
-                "street_side_tolerance": 5,
-                "street_side_max_distance": 1000,
-                "heading_tolerance": 60,
-                "mvt_min_zoom_road_class": {
-                    "0": 0, "1": 0, "2": 0, "3": 0, "4": 0, "5": 0, "6": 0, "7": 0
-                },
-                "mvt_cache_min_zoom": 0,
-                "mvt_cache_max_zoom": 20
-            },
-            "logging": {
-                "type": "std_out",
-                "color": true
-            }
-        },
-        "thor": {
-            "source_to_target_algorithm": "select_optimal",
-            "logging": {
-                "type": "std_out",
-                "color": true
-            }
-        },
-        "odin": {
-            "markup_set": "all",
-            "logging": {
-                "type": "std_out",
-                "color": true
-            }
-        },
-        "meili": {
-            "mode": "map_matching",
-            "customizable": [
-                "mode",
-                "search_radius",
-                "turn_penalty_factor",
-                "gps_accuracy",
-                "interpolation_distance",
-                "sigma_z",
-                "beta",
-                "max_route_distance_factor",
-                "breakage_distance_factor"
-            ],
-            "verbose": false,
-            "default": {
-                "sigma_z": 4.07,
-                "gps_accuracy": 5.0,
-                "beta": 3,
-                "breakage_distance_factor": 2000,
-                "interpolation_distance": 10,
-                "search_radius": 50,
-                "turn_penalty_factor": 200,
-                "max_route_distance_factor": 5,
-                "breakage_distance": 2000,
-            },
-            "grid": {
-                "size": 500,
-                "cache_size": 100240
-            },
-            "logging": {
-                "type": "std_out",
-                "color": true
-            }
-        },
-        "service_limits": {
-            "max_exclude_locations": 50,
-            "max_reachability": 100,
-            "max_radius": 200000,
-            "max_timedep_distance": 500000,
-            "max_alternates": 2,
-            "max_exclude_polygons_length": 10000,
-            "max_exclude_polygons": {
-                "max_locations": 50,
-                "max_distance": 200000,
-                "max_matrix_distance": 200000,
-                "max_matrix_location_pairs": 2500
-            },
-            "auto": {
-                "max_distance": 5000000,
-                "max_locations": 200,
-                "max_matrix_distance": 400000,
-                "max_matrix_location_pairs": 2500
-            },
-            "truck": {
-                "max_distance": 5000000,
-                "max_locations": 200,
-                "max_matrix_distance": 400000,
-                "max_matrix_location_pairs": 2500
-            },
-            "pedestrian": {
-                "max_distance": 250000,
-                "max_locations": 50,
-                "max_matrix_distance": 200000,
-                "max_matrix_location_pairs": 2500,
-                "min_transit_walking_distance": 1,
-                "max_transit_walking_distance": 500
-            },
-            "bicycle": {
-                "max_distance": 500000,
-                "max_locations": 50,
-                "max_matrix_distance": 200000,
-                "max_matrix_location_pairs": 2500
-            },
-            "multimodal": {
-                "max_distance": 500000,
-                "max_locations": 50,
-                "max_matrix_distance": 0,
-                "max_matrix_location_pairs": 0
-            },
-            "transit": {
-                "max_distance": 500000,
-                "max_locations": 50,
-                "max_matrix_distance": 200000,
-                "max_matrix_location_pairs": 2500
-            },
-            "isochrone": {
-                "max_contours": 4,
-                "max_time": 120,
-                "max_time_contour": 120,
-                "max_distance": 25000,
-                "max_distance_contour": 25000,
-                "max_locations": 1
-            },
-            "trace": {
-                "max_distance": 200000,
-                "max_gps_accuracy": 100,
-                "max_search_radius": 100,
-                "max_heading_distance": 60,
-                "max_matched_points": 100,
-                "max_shape": 16000,
-                "max_alternates": 0,
-                "max_alternates_shape": 10000
-            },
-            "skadi": {
-                "max_shape": 750000,
-                "min_resample": 10.0
-            },
-            "status": {
-                "allow_verbose": false
-            }
-        },
-        "costing_options": {
-            "auto": { "use_hills": 0.5 },
-            "truck": { "use_hills": 0.1 }
-        }
-    };
-}
-
-export function calculateBoundingBox(locations: Array<{ lat: number; lon: number }>): BoundingBox {
-    if (locations.length === 0) throw new Error('Empty location list');
-    let minLat = locations[0].lat, maxLat = locations[0].lat, minLon = locations[0].lon, maxLon = locations[0].lon;
-    for (const loc of locations) {
-        minLat = Math.min(minLat, loc.lat); maxLat = Math.max(maxLat, loc.lat);
-        minLon = Math.min(minLon, loc.lon); maxLon = Math.max(maxLon, loc.lon);
-    }
-    const latPadding = Math.max(0.1, (maxLat - minLat) * 0.1), lonPadding = Math.max(0.1, (maxLon - minLon) * 0.1);
-    return { minLat: minLat - latPadding, maxLat: maxLat + latPadding, minLon: minLon - lonPadding, maxLon: maxLon + lonPadding };
-}
-

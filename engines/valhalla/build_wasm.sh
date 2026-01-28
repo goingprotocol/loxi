@@ -40,7 +40,8 @@ docker run --rm -v $(pwd)/src:/output loxi-valhalla-builder \
     -lz \
     -s WASM=1 \
     -s ALLOW_MEMORY_GROWTH=1 \
-    -s MAXIMUM_MEMORY=4GB \
+    -s MEMORY64=1 -Wno-experimental -Wno-error \
+    -s MAXIMUM_MEMORY=16GB \
     -s TOTAL_STACK=33554432 \
     -s INITIAL_MEMORY=67108864 \
     -s EXPORTED_FUNCTIONS="['_init_valhalla', '_valhalla_matrix', '_malloc', '_free']" \

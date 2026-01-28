@@ -29,13 +29,18 @@ RUN git clone -b v21.12 --depth 1 https://github.com/protocolbuffers/protobuf.gi
     && make install \
     && ldconfig
 
+# Set Global Flags for WASM Builds (Memory64)
+ENV CFLAGS="-s MEMORY64=1 -Wno-experimental -Wno-error"
+ENV CXXFLAGS="-s MEMORY64=1 -Wno-experimental -Wno-error"
+ENV LDFLAGS="-s MEMORY64=1 -Wno-experimental -Wno-error"
+
 # 2. Build PROTOBUF for WASM (target)
 RUN git clone -b v21.12 --depth 1 https://github.com/protocolbuffers/protobuf.git protobuf-wasm \
     && cd protobuf-wasm \
     && git submodule update --init --recursive \
     && mkdir build-wasm \
     && cd build-wasm \
-    && emcmake cmake .. -Dprotobuf_BUILD_TESTS=OFF -DCMAKE_INSTALL_PREFIX=/app/wasm-libs \
+    && emcmake cmake .. -Dprotobuf_BUILD_TESTS=OFF -DCMAKE_INSTALL_PREFIX=/app/wasm-libs -DCMAKE_CXX_FLAGS="-s MEMORY64=1 -Wno-experimental -Wno-error" -DCMAKE_C_FLAGS="-s MEMORY64=1 -Wno-experimental -Wno-error" \
     && emmake make -j$(nproc) \
     && emmake make install
 
@@ -43,14 +48,14 @@ RUN git clone -b v21.12 --depth 1 https://github.com/protocolbuffers/protobuf.gi
 RUN wget https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz \
     && tar xzf zlib-1.3.1.tar.gz \
     && cd zlib-1.3.1 \
-    && emcmake cmake . -DCMAKE_INSTALL_PREFIX=/app/wasm-libs \
+    && emcmake cmake . -DCMAKE_INSTALL_PREFIX=/app/wasm-libs -DCMAKE_CXX_FLAGS="-s MEMORY64=1 -Wno-experimental -Wno-error" -DCMAKE_C_FLAGS="-s MEMORY64=1 -Wno-experimental -Wno-error" \
     && emmake make install
 
 # 2.6 Build LZ4 for WASM
 RUN wget https://github.com/lz4/lz4/archive/refs/tags/v1.9.4.tar.gz \
     && tar xzf v1.9.4.tar.gz \
     && cd lz4-1.9.4 \
-    && emmake make lib \
+    && emmake make lib CFLAGS="-s MEMORY64=1 -Wno-experimental -Wno-error" \
     && mkdir -p /app/wasm-libs/include /app/wasm-libs/lib \
     && cp lib/*.h /app/wasm-libs/include/ \
     && cp lib/liblz4.a /app/wasm-libs/lib/
@@ -61,7 +66,7 @@ RUN wget http://download.osgeo.org/geos/geos-3.11.2.tar.bz2 \
     && cd geos-3.11.2 \
     && mkdir build \
     && cd build \
-    && emcmake cmake .. -DCMAKE_INSTALL_PREFIX=/app/wasm-libs -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+    && emcmake cmake .. -DCMAKE_INSTALL_PREFIX=/app/wasm-libs -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DCMAKE_CXX_FLAGS="-s MEMORY64=1 -Wno-experimental -Wno-error" -DCMAKE_C_FLAGS="-s MEMORY64=1 -Wno-experimental -Wno-error" \
     && emmake make -j$(nproc) \
     && emmake make install
 
@@ -69,7 +74,7 @@ RUN wget http://download.osgeo.org/geos/geos-3.11.2.tar.bz2 \
 RUN wget https://sqlite.org/2023/sqlite-autoconf-3410200.tar.gz \
     && tar xzf sqlite-autoconf-3410200.tar.gz \
     && cd sqlite-autoconf-3410200 \
-    && emconfigure ./configure --prefix=/app/wasm-libs --host=wasm32-unknown-emscripten --disable-shared \
+    && emconfigure ./configure --prefix=/app/wasm-libs --host=wasm32-unknown-emscripten --disable-shared CFLAGS="-s MEMORY64=1 -Wno-experimental -Wno-error" \
     && emmake make -j$(nproc) \
     && emmake make install
 
@@ -104,8 +109,13 @@ RUN sed -i 's/pkg_check_modules(ZLIB/# pkg_check_modules(ZLIB/g' CMakeLists.txt 
     && sed -i 's/pkg_check_modules(LZ4/# pkg_check_modules(LZ4/g' src/skadi/CMakeLists.txt \
     && echo "set(ZLIB_FOUND TRUE)" >> CMakeLists.txt \
     && echo "set(LZ4_FOUND TRUE)" >> CMakeLists.txt \
+    && echo "set(ZLIB_FOUND TRUE)" >> CMakeLists.txt \
+    && echo "set(LZ4_FOUND TRUE)" >> CMakeLists.txt \
     && echo "" > src/bindings/python/CMakeLists.txt \
-    && sed -i '2r mock_targets.cmake' CMakeLists.txt
+    && sed -i '2r mock_targets.cmake' CMakeLists.txt \
+    # 4. FORCE IGNORE ERRORS/EXPERIMENTAL WARNINGS
+    && sed -i '1i add_compile_options(-Wno-experimental -Wno-error)' CMakeLists.txt \
+    && find . -name "CMakeLists.txt" -print0 | xargs -0 sed -i 's/-Werror//g'
 
 RUN mkdir build
 WORKDIR /app/valhalla/build
@@ -131,7 +141,10 @@ RUN emcmake cmake .. \
     -DLZ4_INCLUDE_DIR=/app/wasm-libs/include \
     -DLZ4_LIBRARY=/app/wasm-libs/lib/liblz4.a \
     -DGEOS_INCLUDE_DIR=/app/wasm-libs/include \
-    -DGEOS_LIBRARY=/app/wasm-libs/lib/libgeos_c.a
+    -DGEOS_LIBRARY=/app/wasm-libs/lib/libgeos_c.a \
+    -DCMAKE_CXX_FLAGS="-s MEMORY64=1 -Wno-experimental -Wno-error" \
+    -DCMAKE_C_FLAGS="-s MEMORY64=1 -Wno-experimental -Wno-error" \
+    -DCMAKE_EXE_LINKER_FLAGS="-s MEMORY64=1 -Wno-experimental -Wno-error"
 
 # 5. Build Valhalla Lib
 RUN emmake make -j$(nproc) valhalla
