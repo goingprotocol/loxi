@@ -97,7 +97,32 @@ impl Default for Vehicle {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProblemConfig {
+    pub partitioner_hash: Option<String>,
+    pub matrix_artifact_hash: Option<String>,
+    pub solver_artifact_hash: Option<String>,
+    pub workflow_id: Option<String>,
+    pub required_contexts: Vec<String>,
+}
+
+impl Default for ProblemConfig {
+    fn default() -> Self {
+        Self {
+            partitioner_hash: None,
+            matrix_artifact_hash: Some("loxi_valhalla_v1".to_string()),
+            solver_artifact_hash: Some("loxi_vrp_artifact_v1".to_string()),
+            workflow_id: Some("standard_vrp_flow".to_string()),
+            required_contexts: vec![],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Problem {
+    pub id: Option<String>,
+    pub mission_id: Option<String>,
+    #[serde(default)]
+    pub config: ProblemConfig,
     pub stops: Vec<Stop>,
     pub vehicle: Vehicle,
     #[serde(default = "default_fleet_size")]
@@ -118,6 +143,9 @@ fn default_fleet_size() -> usize {
 impl Problem {
     pub fn new(stops: Vec<Stop>, vehicle: Vehicle) -> Self {
         Self {
+            id: None,
+            mission_id: None,
+            config: ProblemConfig::default(),
             stops,
             vehicle,
             fleet_size: 1,

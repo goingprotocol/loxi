@@ -124,26 +124,42 @@ impl AuctionManager {
         let mut expired = Vec::new();
 
         for (id, auction) in self.auctions.iter_mut() {
-            if let AuctionStatus::Assigned(_) = auction.status {
+            let is_stale_open =
+                auction.status == AuctionStatus::Open && (now - auction.created_at > timeout_ms);
+            let is_expired_lease = if let AuctionStatus::Assigned(_) = auction.status {
                 if let Some(assigned_at) = auction.assigned_at {
-                    if now - assigned_at > timeout_ms {
-                        // EXPIRED!
-                        // Reset to Open
-                        auction.status = AuctionStatus::Open;
-                        auction.bids.clear(); // Clear old bids
-                        auction.assigned_at = None;
-
-                        expired.push((
-                            id.clone(),
-                            auction.requirement.clone(),
-                            auction.posted_by.clone(),
-                        ));
-                    }
+                    now - assigned_at > timeout_ms
+                } else {
+                    false
                 }
+            } else {
+                false
+            };
+
+            if is_stale_open || is_expired_lease {
+                // Reset/Refresh
+                if is_expired_lease {
+                    println!("♻️  Lease EXPIRED for Task {}. Revoking...", id);
+                    auction.status = AuctionStatus::Open;
+                    auction.assigned_at = None;
+                } else {
+                    println!("♻️  Auction {} is STALE (No bids). Re-broadcasting...", id);
+                }
+                auction.bids.clear(); // Clear old bids (if any stale ones)
+
+                expired.push((id.clone(), auction.requirement.clone(), auction.posted_by.clone()));
             }
         }
 
         expired
+    }
+
+    pub fn get_open_auctions(&self) -> Vec<(String, TaskRequirement, String)> {
+        self.auctions
+            .iter()
+            .filter(|(_, a)| a.status == AuctionStatus::Open)
+            .map(|(id, a)| (id.clone(), a.requirement.clone(), a.posted_by.clone()))
+            .collect()
     }
 
     fn now() -> u64 {

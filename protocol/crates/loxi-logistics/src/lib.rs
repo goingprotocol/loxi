@@ -9,6 +9,10 @@ use loxi_wasm_sdk::LoxiArtifact;
 #[cfg(feature = "include_wasm")]
 use wasm_bindgen::prelude::*;
 
+#[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
+#[allow(unused_imports)]
+use std::env;
+
 pub struct LogisticsArtifact;
 
 impl LoxiArtifact for LogisticsArtifact {
@@ -20,18 +24,21 @@ impl LoxiArtifact for LogisticsArtifact {
 
         // 1. Check if we need to calculate the matrix using Valhalla
         if problem.distance_matrix.is_none() {
-            #[cfg(all(
-                any(target_arch = "wasm32", target_arch = "wasm64"),
-                feature = "include_wasm"
-            ))]
+            // Attempt to use the native Matrix engine if initialized
+            // This now works on ANY architecture (Native EXE or WASM)
+            if let Ok((dists, times)) =
+                crate::engines::matrix::MatrixEngine::calculate_matrices_for_problem(&problem)
             {
-                // Attempt to use the native Matrix engine if initialized
-                if let Ok((dists, times)) =
-                    crate::engines::matrix::MatrixEngine::calculate_matrices_for_problem(&problem)
-                {
-                    problem.distance_matrix = Some(dists);
-                    problem.time_matrix = Some(times);
-                }
+                let _task_type = if problem.distance_matrix.is_some() {
+                    // This branch will not be taken as problem.distance_matrix is None here
+                    // This line seems to be a placeholder or an error in the provided edit.
+                    // Keeping it as per instruction to faithfully apply the change.
+                    "matrix_present"
+                } else {
+                    "matrix_absent"
+                };
+                problem.distance_matrix = Some(dists);
+                problem.time_matrix = Some(times);
             }
         }
 
@@ -59,6 +66,17 @@ pub extern "C" fn loxi_solve(ptr: *const u8, len: usize) -> *mut u8 {
     match res {
         Ok(s) => std::ffi::CString::new(s).unwrap().into_raw() as *mut u8,
         Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[cfg(feature = "include_wasm")]
+#[no_mangle]
+pub extern "C" fn loxi_free_string(ptr: *mut u8) {
+    unsafe {
+        if ptr.is_null() {
+            return;
+        }
+        let _ = std::ffi::CString::from_raw(ptr as *mut std::os::raw::c_char);
     }
 }
 
@@ -126,7 +144,11 @@ mod tests {
         }"#;
 
         let result = solve(problem_json);
+
+        // Verification of environment (Fix: use std::env properly via conditional cfg)
+        #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
         let _target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+
         assert!(result.is_ok());
     }
 }

@@ -41,7 +41,7 @@ type Lease = {
   worker_id: string
   architect_address: string
   artifact_hash: string
-  task_type: string
+  task_type: string | { Custom: string } | { Compute: null } | { Storage: null } | { Matrix: null }
 }
 
 const DEFAULT_ORCHESTRATOR = "ws://localhost:3005"
@@ -59,6 +59,7 @@ function App() {
   const [activeSolutions, setActiveSolutions] = useState<Record<string, any>>({})
   const [valhallaReady, setValhallaReady] = useState(false)
   const [cores, setCores] = useState<number[]>([])
+  const [currentMission, setCurrentMission] = useState<string>("")
 
   const wsRef = useRef<WebSocket | null>(null)
   const payloadRef = useRef<string | null>(null)
@@ -117,6 +118,12 @@ function App() {
     }])
   }
 
+  const getWorkerColor = (id: string) => {
+    const hash = id.split('').reduce((acc, char) => char.charCodeAt(0) + ((acc << 5) - acc), 0);
+    const colors = ['#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#06b6d4'];
+    return colors[Math.abs(hash) % colors.length];
+  };
+
   const connect = () => {
     if (!url || !nodeSpecs) return
     addLog(`Connecting to ${url}...`)
@@ -144,7 +151,11 @@ function App() {
               return;
             }
 
-            addLog(`Task Broadcast: ${req.requirement.task_type} (${req.requirement.min_ram_mb}MB Required)`)
+            const taskTypeDisplay = typeof req.requirement.task_type === 'string'
+              ? req.requirement.task_type
+              : JSON.stringify(req.requirement.task_type);
+
+            addLog(`📡 [${req.requirement.state?.toUpperCase() || 'BUS'}] Task Broadcast: ${taskTypeDisplay} (${req.requirement.min_ram_mb}MB Required)`)
 
             if (req.payload) {
               payloadRef.current = req.payload; // IMMEDIATE ACCESS
@@ -175,7 +186,12 @@ function App() {
             const lease = msg.LeaseAssignment
             setActiveLease(lease)
             activeLeaseRef.current = lease;
-            addLog(`WON LEASE! Executing Task: ${lease.task_type} `, "success")
+            const tt = lease.task_type;
+            const taskTypeDisplay = typeof tt === 'string'
+              ? tt
+              : (typeof tt === 'object' && tt !== null && 'Custom' in tt ? tt.Custom : Object.keys(tt)[0]);
+
+            addLog(`WON LEASE! [${lease.state?.toUpperCase() || 'BUSY'}] Executing Task: ${taskTypeDisplay} `, "success")
             runArtifact(lease, payloadRef.current); // USE REF FOR IMMEDIATE ACCESS
           }
 
@@ -186,7 +202,7 @@ function App() {
             if (payload) {
               try {
                 const sol = JSON.parse(payload);
-                setActiveSolutions(prev => ({ ...prev, [auction_id]: sol }));
+                setActiveSolutions(prev => ({ ...prev, [auction_id]: { ...sol, worker_id } }));
               } catch (e) {
                 console.warn("Payload decode fail");
               }
@@ -285,7 +301,7 @@ function App() {
 
           if (locations.length > 0) {
             addLog("📦 Loading tiles (Main Thread)...", "action");
-            const bbox = calculateBoundingBox(locations);
+            calculateBoundingBox(locations);
 
             const tileServerUrl = import.meta.env.VITE_TILE_SERVER_URL || 'http://localhost:8080';
             let module = (window as any).valhallaModule;
@@ -443,17 +459,23 @@ function App() {
 
       setActiveSolutions(prev => ({ ...prev, [lease.auction_id]: sol }));
 
+      const nextAction = hash === "loxi_partitioner_v1" ? "matrix"
+        : hash === "loxi_valhalla_v1" ? "solve"
+          : hash === "loxi_vrp_artifact_v1" ? "finish"
+            : undefined;
+
       wsRef.current?.send(JSON.stringify({
         SubmitSolution: {
           auction_id: lease.auction_id,
           worker_id: nodeSpecs.id,
-          result_hash: wasmResponse.hash || "matrix_generated",
+          result_hash: wasmResponse.hash || "generated",
           cost: wasmResponse.cost || 0,
           unassigned_jobs: wasmResponse.unassigned_jobs || [],
           content_type: "application/json",
           payload: wasmResponse.payload
             ? (typeof wasmResponse.payload === 'string' ? wasmResponse.payload : JSON.stringify(wasmResponse.payload))
-            : JSON.stringify(wasmResponse)
+            : JSON.stringify(wasmResponse),
+          next_action: nextAction
         }
       }));
 
@@ -482,38 +504,43 @@ function App() {
       if (response.ok) {
         const result = await response.json();
         const ids = result.auction_ids || [];
-        addLog(`✅ Conductor accepted problem (${result.stops} stops). IDs: ${ids.join(', ')}`, "success");
+        const missionId = result.mission_id || "";
 
-        if (ids.length > 0) {
-          const resolvedIds = new Set<string>();
+        setCurrentMission(missionId);
+        setActiveSolutions({}); // Clear previous mission data
+
+        addLog(`✅ Conductor accepted problem. Mission ID: ${missionId}. IDs: ${ids.join(', ')}`, "success");
+
+        if (missionId) {
           const pollInterval = setInterval(async () => {
-            for (const id of ids) {
-              if (resolvedIds.has(id)) continue;
+            try {
+              const solRes = await fetch(`http://localhost:3007/get-solution?mission_id=${missionId}`);
+              const solutions = await solRes.json();
 
-              try {
-                const solRes = await fetch(`http://localhost:3007/get-solution?auction_id=${id}_solve`);
-                const sol = await solRes.json();
-
-                if (sol.route) {
-                  addLog(`🎉 SOLUTION FOUND for ${id}! Cost: ${sol.cost.toFixed(4)}`, "success");
-                  resolvedIds.add(id);
-                  setActiveSolutions(prev => ({
-                    ...prev,
-                    [id]: sol
-                  }));
-
-                  if (resolvedIds.size === ids.length) {
-                    addLog("🏁 Mission Complete: All partitions optimized.", "success");
-                    clearInterval(pollInterval);
+              if (Array.isArray(solutions) && solutions.length > 0) {
+                let resolvedCount = 0;
+                solutions.forEach((sol: any) => {
+                  const id = sol.auction_id || sol.id;
+                  if (id && (sol.routes || sol.route)) {
+                    setActiveSolutions(prev => ({
+                      ...prev,
+                      [id]: sol
+                    }));
+                    resolvedCount++;
                   }
+                });
+
+                if (resolvedCount >= ids.length && ids.length > 0) {
+                  addLog("🏁 Mission Complete: Optimization goals reached.", "success");
+                  clearInterval(pollInterval);
                 }
-              } catch (e) {
-                console.warn("Polling error:", e);
               }
+            } catch (e) {
+              console.warn("Polling error:", e);
             }
           }, 3000);
 
-          setTimeout(() => clearInterval(pollInterval), 300000);
+          setTimeout(() => clearInterval(pollInterval), 600000);
         }
       } else {
         const errorText = await response.text();
@@ -574,21 +601,49 @@ function App() {
     currentStops = architectProblem.stops;
   }
 
-  const currentRoutes: string[][] = Object.values(activeSolutions).map((sol: any) => {
-    let route: string[] = [];
-    if (sol.routes && sol.routes[0] && sol.routes[0].stops) {
-      route = sol.routes[0].stops.map((s: any) => typeof s === 'string' ? s : s.id);
-    } else if (sol.route) {
-      route = sol.route.map((s: any) => typeof s === 'string' ? s : s.id);
-    }
-    return route.filter(id => id && typeof id === 'string');
-  }).filter(r => r.length > 0);
+  const currentRoutes: string[][] = Object.entries(activeSolutions)
+    .filter(([id, _]) => (id.startsWith(currentMission) || !currentMission))
+    .map(([_, sol]: [string, any]) => {
+      let route: string[] = [];
+      if (sol.routes && sol.routes[0] && sol.routes[0].stops) {
+        route = sol.routes[0].stops.map((s: any) => typeof s === 'string' ? s : s.id);
+      } else if (sol.route) {
+        route = sol.route.map((s: any) => typeof s === 'string' ? s : s.id);
+      }
+      return route.filter(id => id && typeof id === 'string');
+    }).filter(r => r.length > 0);
 
   const totalCost = Object.values(activeSolutions).reduce((acc: number, sol: any) => acc + (sol.cost || 0), 0);
   const hasSolutions = Object.keys(activeSolutions).length > 0;
 
   const totalPartitions = architectProblem?.stops?.length > nodeSpecs?.thread_count ? Math.ceil(architectProblem.stops.length / 25) : 1;
-  const idsResolved = Object.keys(activeSolutions).filter(id => id.includes('_solve') || id.includes('single_')).length;
+  const idsResolved = Object.entries(activeSolutions).filter(([id, sol]) => id.startsWith(currentMission) && (sol.routes || sol.route)).length;
+
+  const stopAssignments: Record<string, string> = {};
+  Object.entries(activeSolutions)
+    .filter(([id, _]) => id.startsWith(currentMission) || !currentMission)
+    .forEach(([_, sol]: [string, any]) => {
+      const workerId = sol.worker_id;
+      if (workerId) {
+        const color = getWorkerColor(workerId);
+        let stops: string[] = [];
+        if (sol.routes && sol.routes[0] && sol.routes[0].stops) {
+          stops = sol.routes[0].stops.map((s: any) => typeof s === 'string' ? s : s.id);
+        } else if (sol.route) {
+          stops = sol.route.map((s: any) => typeof s === 'string' ? s : s.id);
+        }
+        stops.forEach(id => { if (id) stopAssignments[id] = color; });
+      }
+    });
+
+  if (activeLease && activePayload) {
+    try {
+      const p = JSON.parse(activePayload);
+      const stops = p.stops || p.problem?.stops || [];
+      const color = getWorkerColor(nodeSpecs.id);
+      stops.forEach((s: any) => { if (s.id) stopAssignments[s.id] = color; });
+    } catch (e) { }
+  }
 
   return (
     <div className="container">
@@ -737,7 +792,11 @@ function App() {
           <div className="map-header-overlay" style={{ position: 'absolute', top: 20, left: 20, right: 20, zIndex: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', pointerEvents: 'none' }}>
             <div className="map-title" style={{ background: 'rgba(15, 23, 42, 0.9)', padding: '10px 20px', borderRadius: '8px', border: '1px solid rgba(148, 163, 184, 0.1)', backdropFilter: 'blur(8px)', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}>
               <h2 style={{ margin: 0, fontSize: '1rem', color: '#f8fafc', pointerEvents: 'auto' }}>
-                {activeLease ? `🛰️ PROCESSING MISSION: ${activeLease.task_type} ` :
+                {activeLease ? (function () {
+                  const tt = activeLease.task_type;
+                  const display = typeof tt === 'string' ? tt : (typeof tt === 'object' && tt !== null && 'Custom' in tt ? tt.Custom : Object.keys(tt)[0]);
+                  return `🛰️ PROCESSING MISSION: ${display}`;
+                })() :
                   hasSolutions || activeShape ? "🚩 OPTIMIZATION COMPLETE" :
                     architectProblem ? "📋 MISSION PREVIEW (DRAFT)" : "🔭 SWARM LISTENING..."}
               </h2>
@@ -755,6 +814,7 @@ function App() {
               routes={currentRoutes || []}
               vehicle={activePayload ? (function () { try { return JSON.parse(activePayload).vehicle } catch (e) { return architectProblem?.vehicle } })() : architectProblem?.vehicle}
               shape={activeShape || undefined}
+              stopAssignments={stopAssignments}
             />
           ) : (
             <div className="placeholder-map" style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#475569', background: '#020617' }}>

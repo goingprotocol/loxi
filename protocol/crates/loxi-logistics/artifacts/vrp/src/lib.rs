@@ -71,10 +71,6 @@ impl LoxiArtifact for VrpArtifact {
     fn get_cost(solution: &Self::Solution) -> f64 {
         solution.cost
     }
-
-    fn get_unassigned_jobs(solution: &Self::Solution) -> Vec<String> {
-        solution.unassigned_jobs.clone()
-    }
 }
 
 // --- WASM ENTRY POINT ---

@@ -32,9 +32,9 @@ impl LoxiArtifact for SectorArtifact {
     fn solve(problem: &Self::Problem) -> Result<Self::Solution, String> {
         // 1. Prepare Valhalla Problem
         let v_problem = ValhallaProblem {
-            locations: problem.stops.iter().map(|s| s.location.clone()).collect(),
+            sources: problem.stops.iter().map(|s| s.location.clone()).collect(),
+            targets: problem.stops.iter().map(|s| s.location.clone()).collect(),
             costing: "auto".to_string(),
-            extra: serde_json::Map::new(),
         };
 
         // 2. CALL THE BRIDGE (Matrix Calculation)
@@ -55,7 +55,7 @@ impl LoxiArtifact for SectorArtifact {
             25,
             problem.vehicle.capacity,
         );
-        let routes = partitioner.partition_problem(problem);
+        let (routes, unassigned_jobs) = partitioner.partition_problem(problem);
 
         let mut sub_problems = Vec::new();
 
@@ -84,6 +84,9 @@ impl LoxiArtifact for SectorArtifact {
 
             if !sub_stops.is_empty() {
                 let mut sub_problem = Problem {
+                    id: None,
+                    mission_id: problem.mission_id.clone(),
+                    config: problem.config.clone(),
                     stops: sub_stops,
                     fleet_size: 1,
                     vehicle: problem.vehicle.clone(),
@@ -111,27 +114,11 @@ impl LoxiArtifact for SectorArtifact {
             }
         }
 
-        let mut assigned_ids = std::collections::HashSet::new();
-        for route in &routes {
-            assigned_ids.extend(route.job_ids.clone());
-        }
-
-        let unassigned_jobs: Vec<String> = problem
-            .stops
-            .iter()
-            .filter(|s| !assigned_ids.contains(&s.id))
-            .map(|s| s.id.clone())
-            .collect();
-
         Ok(PartitionResult { sub_problems, unassigned_jobs })
     }
 
     fn get_cost(_solution: &Self::Solution) -> f64 {
         0.0
-    }
-
-    fn get_unassigned_jobs(solution: &Self::Solution) -> Vec<String> {
-        solution.unassigned_jobs.clone()
     }
 }
 

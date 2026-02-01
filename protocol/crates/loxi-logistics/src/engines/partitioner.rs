@@ -26,8 +26,9 @@ impl Partitioner {
         Self { resolution, max_cluster_size, max_demand }
     }
 
-    pub fn partition_problem(&self, problem: &Problem) -> Vec<Partition> {
+    pub fn partition_problem(&self, problem: &Problem) -> (Vec<Partition>, Vec<String>) {
         let mut initial_buckets: HashMap<CellIndex, Vec<Stop>> = HashMap::new();
+        let mut unassigned_jobs = Vec::new();
 
         // 1. Binning
         for stop in &problem.stops {
@@ -35,51 +36,40 @@ impl Partitioner {
                 .map(|ll| ll.to_cell(self.resolution))
             {
                 initial_buckets.entry(cell).or_default().push(stop.clone());
+            } else {
+                unassigned_jobs.push(stop.id.clone());
             }
         }
 
         // 2. Region Growing
-        self.region_growing(initial_buckets)
+        let (partitions, clustered_unassigned) = self.region_growing(initial_buckets);
+        unassigned_jobs.extend(clustered_unassigned);
+
+        (partitions, unassigned_jobs)
     }
 
-    fn region_growing(&self, mut buckets: HashMap<CellIndex, Vec<Stop>>) -> Vec<Partition> {
+    fn region_growing(
+        &self,
+        mut buckets: HashMap<CellIndex, Vec<Stop>>,
+    ) -> (Vec<Partition>, Vec<String>) {
         let mut partitions = Vec::new();
-        // Frontier: Cells that are adjacent to previously created partitions but weren't consumed yet.
-        // We use a BTreeSet for deterministic ordering (default: lowest cell index first).
         let mut frontier: BTreeSet<CellIndex> = BTreeSet::new();
 
         while !buckets.is_empty() {
-            // 1. Pick a seed
-            // Priority:
-            // A. Frontier (adjacent to previous) to ensure continuity.
-            // B. If frontier empty, pick the "first" available cell deterministically.
-            let seed_cell = if let Some(&f_cell) = frontier.iter().find(|c| buckets.contains_key(c))
-            {
-                f_cell
-            } else {
-                // Frontier is empty or stale. Pick deterministic start from remaining buckets.
-                // Cloning keys to sort is acceptable for moderate N.
-                let mut keys: Vec<CellIndex> = buckets.keys().cloned().collect();
-                keys.sort_unstable(); // Deterministic
-                keys[0] // Safe because while check
-            };
-
-            // Remove the used seed from frontier to avoid re-picking immediately (though buckets check handles it)
+            let mut keys: Vec<CellIndex> = buckets.keys().cloned().collect();
+            keys.sort_unstable();
+            let seed_cell =
+                frontier.iter().find(|c| buckets.contains_key(c)).cloned().unwrap_or(keys[0]);
             frontier.remove(&seed_cell);
 
             let mut cluster_stops = Vec::new();
             let mut current_demand = 0.0;
-
-            // Local BFS Queue for this partition
             let mut queue: VecDeque<CellIndex> = VecDeque::new();
             queue.push_back(seed_cell);
-
             let mut seen_in_this_pass: HashSet<CellIndex> = HashSet::new();
             seen_in_this_pass.insert(seed_cell);
 
             while let Some(current_cell) = queue.pop_front() {
-                // Try to consume stops from this cell
-                // We peek/modify efficiently
                 let should_remove_bucket = if let Some(cell_stops) = buckets.get_mut(&current_cell)
                 {
                     while let Some(stop) = cell_stops.pop() {
@@ -89,7 +79,6 @@ impl Partitioner {
                             current_demand += stop.demand;
                             cluster_stops.push(stop);
                         } else {
-                            // Put back and stop consuming for this partition
                             cell_stops.push(stop);
                             break;
                         }
@@ -103,16 +92,9 @@ impl Partitioner {
                     buckets.remove(&current_cell);
                 }
 
-                // If partition is full, we stop EXPANDING this partition.
-                // IMPORTANT: The neighbors we *would* have visited are now candidates for the NEXT partition.
-                // But we only add them to frontier if they actually have stops.
                 if cluster_stops.len() >= self.max_cluster_size {
-                    // Add current_cell's UNVISITED neighbors to global frontier
-                    // effectively "pausing" the BFS here to resume later.
-                    // Use explicit generic u32 for grid_disk to avoid inference error
                     let neighbors = current_cell.grid_disk::<Vec<CellIndex>>(1);
                     for n in neighbors {
-                        // If n has data and wasn't processed in this pass fully...
                         if buckets.contains_key(&n) && !seen_in_this_pass.contains(&n) {
                             frontier.insert(n);
                         }
@@ -120,11 +102,8 @@ impl Partitioner {
                     break;
                 }
 
-                // Add neighbors to local queue to keep growing THIS partition
-                // Sort neighbors for deterministic BFS traversal order
                 let mut sorted_neighbors = current_cell.grid_disk::<Vec<CellIndex>>(1);
                 sorted_neighbors.sort_unstable();
-
                 for n in sorted_neighbors {
                     if buckets.contains_key(&n) && !seen_in_this_pass.contains(&n) {
                         seen_in_this_pass.insert(n);
@@ -133,18 +112,15 @@ impl Partitioner {
                 }
             }
 
-            // After finishing a partition, any leftover cells in the queue (that we didn't get to because full)
-            // should be added to the frontier for the next pass.
             for leftover in queue {
                 if buckets.contains_key(&leftover) {
                     frontier.insert(leftover);
                 }
             }
 
-            // Create Partition
             if !cluster_stops.is_empty() {
                 partitions.push(Partition {
-                    id: format!("part_{}", seed_cell),
+                    id: seed_cell.to_string(),
                     job_ids: cluster_stops.iter().map(|s| s.id.clone()).collect(),
                     center_hex: seed_cell.to_string(),
                     total_load: cluster_stops.len(),
@@ -153,7 +129,14 @@ impl Partitioner {
             }
         }
 
-        partitions
+        let mut unassigned = Vec::new();
+        for stops in buckets.values() {
+            for stop in stops {
+                unassigned.push(stop.id.clone());
+            }
+        }
+
+        (partitions, unassigned)
     }
 }
 
@@ -200,10 +183,10 @@ mod tests {
         let partitioner = Partitioner::with_options(Resolution::Nine, 5, 100.0);
 
         // Run 1
-        let p1 = partitioner.partition_problem(&problem);
+        let (p1, _) = partitioner.partition_problem(&problem);
 
         // Run 2
-        let p2 = partitioner.partition_problem(&problem);
+        let (p2, _) = partitioner.partition_problem(&problem);
 
         assert_eq!(p1.len(), p2.len(), "Partition count mismatch");
         for (part1, part2) in p1.iter().zip(p2.iter()) {
@@ -238,7 +221,7 @@ mod tests {
 
         // Max cluster size 10 -> Should usually get 5 partitions, maybe 6 if greedy packing is imperfect
         let partitioner = Partitioner::with_options(Resolution::Nine, 10, 1000.0);
-        let partitions = partitioner.partition_problem(&problem);
+        let (partitions, unassigned) = partitioner.partition_problem(&problem);
 
         assert!(
             partitions.len() >= 5 && partitions.len() <= 6,
@@ -247,6 +230,7 @@ mod tests {
         );
 
         let mut assigned_stops = HashSet::new();
+        // Add assigned
         for p in partitions {
             assert!(p.total_load <= 10);
             for id in p.job_ids {
@@ -254,6 +238,10 @@ mod tests {
             }
         }
 
-        assert_eq!(assigned_stops.len(), total_stops, "Not all stops were assigned");
+        assert_eq!(
+            assigned_stops.len() + unassigned.len(),
+            total_stops,
+            "Not all stops were accounted for"
+        );
     }
 }

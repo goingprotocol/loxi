@@ -1,6 +1,6 @@
 use futures_util::{SinkExt, StreamExt};
 use loxi_core::{
-    DomainAuthority, Message as LoxiMessage, NodeSpecs, OrchestratorLogic, TaskRequirement,
+    Assignment, Bid, DomainAuthority, Message as LoxiMessage, NodeSpecs, OrchestratorLogic,
     WorkerLease,
 };
 use std::collections::HashMap;
@@ -41,7 +41,7 @@ async fn main() {
 
                 let expired = {
                     let mut mgr = manager_monitor.lock().await;
-                    mgr.check_expired_leases(30000) // 30s Timeout
+                    mgr.check_expired_leases(10000) // 10s Timeout
                 };
 
                 if !expired.is_empty() {
@@ -135,6 +135,27 @@ async fn handle_connection(
 
                         nodes_map.lock().await.insert(id.clone(), node_specs);
                         peers_map.lock().await.insert(id.clone(), tx.clone());
+
+                        // REACTIVE: New worker joined. They need to know about all currently OPEN tasks.
+                        let open_tasks = auction_manager.lock().await.get_open_auctions();
+                        if !open_tasks.is_empty() {
+                            println!(
+                                "📡 Reactive: Worker {} JOINED. Announcing {} open tasks...",
+                                id,
+                                open_tasks.len()
+                            );
+                            for (_task_id, req, _) in open_tasks {
+                                let msg = LoxiMessage::RequestLease {
+                                    domain_id: "generic_grid".to_string(),
+                                    requirement: req,
+                                    count: 1,
+                                    payload: None,
+                                };
+                                if let Ok(payload_str) = serde_json::to_string(&msg) {
+                                    let _ = tx.send(WsMessage::Text(payload_str)).await;
+                                }
+                            }
+                        }
                     }
                     LoxiMessage::RegisterAuthority(auth) => {
                         let id = auth.domain_id.clone();
@@ -280,34 +301,56 @@ async fn handle_connection(
                             auction_id, solution.result_hash
                         );
 
-                        // --- FIX: Mark Task as Completed to stop Lease Expiry Monitor ---
-                        {
+                        // 1. Mark Task as Completed and get Open Tasks in ONE lock to avoid deadlocks
+                        let (open_tasks, poster_id) = {
                             let mut manager = auction_manager.lock().await;
                             if let Some(auction) = manager.get_auction_mut(&auction_id) {
                                 auction.status = AuctionStatus::Completed;
                                 println!("✅ Auction {} marked as COMPLETED", auction_id);
                             }
-                        }
+                            // While we have the lock, get everything else needed for the reactive phase
+                            let open = manager.get_open_auctions();
+                            let poster =
+                                manager.get_auction(&auction_id).map(|a| a.posted_by.clone());
+                            (open, poster)
+                        };
 
-                        let peers = peers_map.lock().await;
-                        if let Some(auction) = auction_manager.lock().await.get_auction(&auction_id)
-                        {
-                            if let Some(poster_tx) = peers.get(&auction.posted_by) {
+                        // 2. Relay solution to poster and trigger reactive re-broadcast
+                        if let Some(poster) = poster_id {
+                            let peers = peers_map.lock().await;
+
+                            // Relay to architect
+                            if let Some(poster_tx) = peers.get(&poster) {
                                 let relayed_msg = LoxiMessage::SubmitSolution(solution);
                                 let _ = poster_tx
                                     .send(WsMessage::Text(
                                         serde_json::to_string(&relayed_msg).unwrap(),
                                     ))
                                     .await;
+                                println!("📡 Solution relayed to task poster: {}", poster);
+                            }
+
+                            // 3. REACTIVE: Worker is likely free now. Re-broadcast ALL open tasks to everyone.
+                            if !open_tasks.is_empty() {
                                 println!(
-                                    "📡 Solution relayed to task poster: {}",
-                                    auction.posted_by
+                                    "✨ REACTIVE: Worker finished. Re-broadcasting {} open tasks to the swarm...",
+                                    open_tasks.len()
                                 );
-                            } else {
-                                println!(
-                                    "⚠️ Task poster {} disconnected, solution dropped",
-                                    auction.posted_by
-                                );
+                                for (_tid, req, _) in open_tasks {
+                                    let msg = LoxiMessage::RequestLease {
+                                        domain_id: "generic_grid".to_string(),
+                                        requirement: req,
+                                        count: 1,
+                                        payload: None,
+                                    };
+                                    if let Ok(payload_str) = serde_json::to_string(&msg) {
+                                        for (_node_id, peer_tx) in peers.iter() {
+                                            let _ = peer_tx
+                                                .send(WsMessage::Text(payload_str.clone()))
+                                                .await;
+                                        }
+                                    }
+                                }
                             }
                         } else {
                             println!("⚠️ Unknown auction {}, solution dropped", auction_id);

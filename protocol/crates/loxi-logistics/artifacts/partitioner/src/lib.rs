@@ -1,4 +1,4 @@
-use loxi_logistics::engines::partitioner::{Partition, Partitioner};
+use loxi_logistics::engines::partitioner::Partitioner;
 use loxi_logistics::manager::types::Problem;
 use loxi_wasm_sdk::{loxi_worker_wrapper, LoxiArtifact};
 use serde::{Deserialize, Serialize};
@@ -9,6 +9,7 @@ use wasm_bindgen::prelude::*;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PartitionResult {
     pub sub_problems: Vec<Problem>,
+    pub unassigned_jobs: Vec<String>,
 }
 
 // --- ARTIFACT IMPLEMENTATION (The SDK Glue) ---
@@ -21,7 +22,7 @@ impl LoxiArtifact for PartitionerArtifact {
 
     fn solve(problem: &Self::Problem) -> Result<Self::Solution, String> {
         let partitioner = Partitioner::new();
-        let partitions = partitioner.partition_problem(problem);
+        let (partitions, unassigned_jobs) = partitioner.partition_problem(problem);
 
         // Convert partitions back to sub-problems
         let mut sub_problems = Vec::new();
@@ -31,6 +32,9 @@ impl LoxiArtifact for PartitionerArtifact {
 
             if !sub_stops.is_empty() {
                 sub_problems.push(Problem {
+                    id: None,
+                    mission_id: problem.mission_id.clone(),
+                    config: problem.config.clone(),
                     stops: sub_stops,
                     fleet_size: 1,
                     vehicle: problem.vehicle.clone(),
@@ -42,11 +46,11 @@ impl LoxiArtifact for PartitionerArtifact {
             }
         }
 
-        Ok(PartitionResult { sub_problems })
+        Ok(PartitionResult { sub_problems, unassigned_jobs })
     }
 
     fn get_cost(_solution: &Self::Solution) -> f64 {
-        0.0 // Partitioning has no intrinsic "cost" in VRP terms
+        0.0
     }
 }
 

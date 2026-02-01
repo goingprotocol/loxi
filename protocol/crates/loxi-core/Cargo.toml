@@ -7,3 +7,6 @@ repository.workspace = true
 
 [dependencies]
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

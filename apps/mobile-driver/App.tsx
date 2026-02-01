@@ -198,7 +198,8 @@ export default function App() {
             result_hash: "hash_" + Date.now(),
             cost: solution.cost,
             content_type: "application/json",
-            payload: JSON.stringify(solution)
+            payload: JSON.stringify(solution),
+            next_action: "finish"
           }
         };
         wsRef.current?.send(JSON.stringify(solutionMsg));
@@ -255,8 +256,15 @@ export default function App() {
             console.log("📦 Payload:", req.payload ? req.payload.length + " bytes" : "NULL");
 
             // TASK TYPE CHECK (Mobile only supports VRP 'solve')
-            if (req.requirement?.task_type !== 'solve') {
-              console.log(`⚠️ Ignoring Task Type: ${req.requirement?.task_type} (Only 'solve' supported)`);
+            const isSolve = req.requirement?.task_type === 'Compute' ||
+              req.requirement?.task_type === 'solve' ||
+              (req.requirement?.task_type?.Custom === 'solve');
+
+            if (!isSolve) {
+              const tt = typeof req.requirement?.task_type === 'string'
+                ? req.requirement?.task_type
+                : (req.requirement?.task_type?.Custom || Object.keys(req.requirement?.task_type)[0]);
+              console.log(`⚠️ Ignoring Task Type: ${tt} (Only 'solve' supported)`);
               return;
             }
 
@@ -267,7 +275,8 @@ export default function App() {
             }
 
             reqCache.current = req;
-            addLog(`Opportunity: ${req.domain_id} [RAM: ${req.requirement.min_ram_mb}MB]`);
+            const state = req.requirement?.state?.toUpperCase() || "BUSY";
+            addLog(`Opportunity: ${req.domain_id} [${state}] [RAM: ${req.requirement.min_ram_mb}MB]`);
 
             const freeRamMb = NODE_SPECS.ram_mb * 0.7;
             if (req.requirement.min_ram_mb > freeRamMb) {
@@ -299,7 +308,13 @@ export default function App() {
             const lease = msg.LeaseAssignment;
             activeAssignmentRef.current = lease;
             setStatus('EXECUTING 🧬');
-            addLog(`🏆 WON LEASE! Artifact: ${lease.artifact_hash}`, 'success');
+
+            const taskDisplay = typeof lease.task_type === 'string'
+              ? lease.task_type
+              : (lease.task_type.Custom || Object.keys(lease.task_type)[0]);
+
+            const state = lease.state?.toUpperCase() || "SOLVING";
+            addLog(`🏆 WON LEASE! [${state}] Artifact: ${lease.artifact_hash} (${taskDisplay})`, 'success');
             setAssignment(lease);
 
             if (reqCache.current && reqCache.current.payload) {

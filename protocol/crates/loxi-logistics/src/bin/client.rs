@@ -1,12 +1,20 @@
 use futures_util::{SinkExt, StreamExt};
+use loxi_architect_sdk::DataServer;
 use loxi_core::{DomainAuthority, Message as LoxiMessage};
-use loxi_logistics::manager::LogisticsManager;
+use loxi_logistics::manager::{LogisticsDataProvider, LogisticsManager};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as WsMessage};
 use url::Url;
 
+// --- CONFIGURATION DEFAULTS ---
+// For Production Releases, change these to the official Loxi Network endpoints.
+const DEFAULT_ORCHESTRATOR_URL: &str = "ws://localhost:3005"; // e.g., "wss://api.loxi.network"
+const DEFAULT_PUBLIC_URL: &str = "ws://localhost:3006"; // e.g., "wss://logistics.going.com"
+
 #[tokio::main]
 async fn main() {
-    let connect_addr = "ws://localhost:3005";
+    // 1. Configuration: Env Vars > Defaults
+    let connect_addr = std::env::var("LOXI_ORCHESTRATOR_URL")
+        .unwrap_or_else(|_| DEFAULT_ORCHESTRATOR_URL.to_string());
     let url = Url::parse(&connect_addr).expect("Bad URL");
 
     println!("👑 Starting Logistics (The Conductor)...");
@@ -18,14 +26,15 @@ async fn main() {
     let (mut write, mut read) = ws_stream.split();
 
     // 1. Initialize Internal Logistics Manager
-    let manager = LogisticsManager::new(connect_addr);
+    let manager = LogisticsManager::new(&connect_addr);
     let manager_arc = std::sync::Arc::new(tokio::sync::Mutex::new(manager));
 
     // 2. Register as Authority with our PUBLIC DATA ADDRESS (The Sala)
     // This allows workers to discover where to download/push logs.
     let auth = DomainAuthority {
         domain_id: "logistics".to_string(),
-        authority_address: "ws://localhost:3006".to_string(), // Use localhost for local dev
+        authority_address: std::env::var("LOXI_PUBLIC_URL")
+            .unwrap_or_else(|_| DEFAULT_PUBLIC_URL.to_string()),
     };
     let reg_msg = LoxiMessage::RegisterAuthority(auth);
     write
@@ -38,12 +47,12 @@ async fn main() {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<LoxiMessage>(32);
 
     // 4. Start the Direct Data Server in the background
-    let manager_for_server = manager_arc.clone();
+    let provider = std::sync::Arc::new(LogisticsDataProvider { manager: manager_arc.clone() });
+    let data_server = DataServer::new(provider, "logistics".to_string());
     let tx_for_server = tx.clone();
+
     tokio::spawn(async move {
-        if let Err(e) =
-            LogisticsManager::start_data_server(manager_for_server, 3006, tx_for_server).await
-        {
+        if let Err(e) = data_server.start(3006, tx_for_server).await {
             println!("❌ Data Server Error: {}", e);
         }
     });
@@ -74,8 +83,14 @@ async fn main() {
                     let mut mg = manager.lock().await;
                     println!("📥 HTTP: Received problem with {} stops", problem.stops.len());
 
-                    // Start the pipeline by distributing tasks
-                    let (messages, ids) = mg.distribute_tasks(&problem);
+                    let mission_id = format!(
+                        "mission_{}",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs()
+                    );
+                    let (messages, ids) = mg.distribute_tasks(mission_id.clone(), &problem);
 
                     // Send all initial tasks through the channel
                     for msg in messages {
@@ -86,6 +101,7 @@ async fn main() {
 
                     Ok::<_, warp::Rejection>(warp::reply::json(&serde_json::json!({
                         "status": "accepted",
+                        "mission_id": mission_id,
                         "stops": problem.stops.len(),
                         "auction_ids": ids
                     })))
@@ -98,9 +114,19 @@ async fn main() {
             .and_then(move |params: std::collections::HashMap<String, String>| {
                 let manager = manager_for_http.clone();
                 async move {
-                    if let Some(auction_id) = params.get("auction_id") {
+                    if let Some(mission_id) = params.get("mission_id") {
                         let mg = manager.lock().await;
-                        if let Some(problem) = mg.pending_problems.get(auction_id) {
+                        let solutions: Vec<_> = mg
+                            .pending_problems
+                            .values()
+                            .filter(|p| p.mission_id.as_deref() == Some(mission_id))
+                            .filter_map(|p| p.solution.as_ref())
+                            .collect();
+                        return Ok::<_, warp::Rejection>(warp::reply::json(&solutions));
+                    }
+                    if let Some(id) = params.get("auction_id") {
+                        let mg = manager.lock().await;
+                        if let Some(problem) = mg.pending_problems.get(id) {
                             if let Some(ref solution) = problem.solution {
                                 return Ok::<_, warp::Rejection>(warp::reply::json(&solution));
                             }

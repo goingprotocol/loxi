@@ -20,11 +20,6 @@ pub trait LoxiArtifact {
 
     /// (Optional) Get the cost of a solution.
     fn get_cost(solution: &Self::Solution) -> f64;
-
-    /// (Optional) Get unassigned jobs.
-    fn get_unassigned_jobs(_solution: &Self::Solution) -> Vec<String> {
-        Vec::new()
-    }
 }
 
 #[derive(Serialize)]
@@ -32,7 +27,6 @@ pub struct ArtifactResponse {
     pub payload: String,
     pub hash: String,
     pub cost: f64,
-    pub unassigned_jobs: Vec<String>,
 }
 
 /// Standardized wrapper to handle the WASM boundary.
@@ -49,9 +43,8 @@ pub fn loxi_worker_wrapper<T: LoxiArtifact>(problem_json: &str) -> Result<String
     let solution = T::solve(&problem)
         .map_err(|e| JsValue::from_str(&format!("Solver execution failed: {}", e)))?;
 
-    // 4. Extract cost and unassigned jobs
+    // 4. Extract cost
     let cost = T::get_cost(&solution);
-    let unassigned_jobs = T::get_unassigned_jobs(&solution);
 
     // 5. Serialize solution
     let solution_json = serde_json::to_string(&solution)
@@ -63,8 +56,7 @@ pub fn loxi_worker_wrapper<T: LoxiArtifact>(problem_json: &str) -> Result<String
     let result_hash = format!("{:x}", hasher.finalize());
 
     // 7. Wrap for the network
-    let response =
-        ArtifactResponse { payload: solution_json, hash: result_hash, cost, unassigned_jobs };
+    let response = ArtifactResponse { payload: solution_json, hash: result_hash, cost };
 
     Ok(serde_json::to_string(&response).unwrap())
 }

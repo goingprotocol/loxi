@@ -20,7 +20,8 @@ impl CoreLogistics {
     pub fn partition(&self, problem: &Problem) -> Vec<Partition> {
         // Delegate to the shared engine
         let partitioner = Partitioner::with_options(self.resolution, self.max_cluster_size, 1000.0);
-        partitioner.partition_problem(problem)
+        let (partitions, _unassigned) = partitioner.partition_problem(problem);
+        partitions
     }
 
     /// Validates if a solution is legitimate for a given problem.

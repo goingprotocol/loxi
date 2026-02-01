@@ -4,12 +4,14 @@ pub mod partitioner;
 pub mod types;
 
 use crate::manager::core::CoreLogistics;
+use async_trait::async_trait;
+use loxi_architect_sdk::DataProvider;
 use loxi_core::{DomainAuthority, Message as LoxiMessage, TaskRequirement, TaskType};
 use serde::{Deserialize, Serialize};
 #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
 use std::sync::Arc;
 #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::Mutex;
 #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
 use uuid;
 
@@ -26,12 +28,6 @@ pub struct LogisticsManager {
     pub core: CoreLogistics,
     // Task Cache for Direct Data Route
     pub pending_problems: std::collections::HashMap<String, types::Problem>,
-    // Active Room Connections: auction_id -> Vec<mpsc::Sender<WsMessage>>
-    #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
-    pub active_rooms: std::collections::HashMap<
-        String,
-        Vec<mpsc::Sender<tokio_tungstenite::tungstenite::Message>>,
-    >,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -48,8 +44,6 @@ impl LogisticsManager {
             auction_manager: auction::AuctionManager::new(),
             core: CoreLogistics::new(),
             pending_problems: std::collections::HashMap::new(),
-            #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
-            active_rooms: std::collections::HashMap::new(),
         };
         slf.load_state();
         slf
@@ -93,61 +87,69 @@ impl LogisticsManager {
     pub fn generate_worker_request(
         &self,
         task_id: String,
+        artifact_hash: &str,
         task_type: TaskType,
+        mission_id: Option<String>,
+        context_hashes: Vec<String>,
+        workflow_id: Option<String>,
+        state: &str,
         min_ram: u64,
     ) -> TaskRequirement {
-        let artifact_hash = match task_type {
-            TaskType::Matrix => "loxi_valhalla_v1",
-            TaskType::Solve => "loxi_vrp_artifact_v1",
-            TaskType::Partition => {
-                if task_id.contains("sector") {
-                    "loxi_sector_v1"
-                } else {
-                    "loxi_partitioner_v1"
-                }
-            }
-        };
-
         TaskRequirement {
             id: task_id,
             artifact_hash: artifact_hash.to_string(),
-            context_hashes: vec!["H3_BUE_7".to_string()],
-            task_type: task_type.clone(),
+            context_hashes,
+            task_type,
+            mission_id,
             min_ram_mb: min_ram,
-            use_gpu: false, // Mobile-driver/VRP is CPU-based for now
+            use_gpu: false,
+            workflow_id,
+            state: Some(state.to_string()),
         }
     }
 
     /// Step 3: Conduct the competitive auction or delegate partitioning.
     pub fn distribute_tasks(
         &mut self,
+        auction_id: String,
         problem: &types::Problem,
     ) -> (Vec<LoxiMessage>, Vec<String>) {
         let mut messages = Vec::new();
         let mut ids = Vec::new();
 
+        // Ensure problem has the correctly set ID and Mission tracking
+        let mut problem = problem.clone();
+        let mission_id = problem.mission_id.clone().unwrap_or(auction_id.clone());
+        problem.id = Some(auction_id.clone());
+        problem.mission_id = Some(mission_id.clone());
+
         // --- HIERARCHICAL ORCHESTRATION ---
 
         // 0. BYPASS: If the problem is small enough, don't partition.
-        println!(
-            "🔍 [Engine] distribute_tasks check: {} stops. (Threshold: 12)",
-            problem.stops.len()
-        );
         if problem.stops.len() <= 12 {
-            println!(
-                "🚀 [Engine] Bypassing partitioning for mission of {} stops.",
-                problem.stops.len()
-            );
-            #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
-            let task_id = format!("single_{}", uuid::Uuid::new_v4());
-            #[cfg(any(target_arch = "wasm32", target_arch = "wasm64"))]
-            let task_id = format!(
-                "single_wasm_{}",
-                problem.stops.first().map(|s| s.id.as_str()).unwrap_or("unknown")
-            );
-            let req = self.generate_worker_request(task_id.clone(), TaskType::Matrix, 1024);
+            let mission_id = problem.mission_id.clone().unwrap_or(auction_id.clone());
+            let mut problem = problem;
+            problem.mission_id = Some(mission_id.clone());
+            problem.id = Some(auction_id.clone());
 
-            self.pending_problems.insert(task_id.clone(), problem.clone());
+            let task_id = auction_id.clone();
+            let solver_hash = problem
+                .config
+                .solver_artifact_hash
+                .clone()
+                .unwrap_or_else(|| "loxi_vrp_artifact_v1".to_string());
+            let req = self.generate_worker_request(
+                task_id.clone(),
+                &solver_hash,
+                TaskType::Compute,
+                Some(mission_id.clone()),
+                problem.config.required_contexts.clone(),
+                problem.config.workflow_id.clone(),
+                "solving",
+                1024,
+            );
+
+            self.pending_problems.insert(task_id.clone(), problem);
             ids.push(task_id.clone());
             messages.push(self.auction_manager.create_auction(task_id, req, None));
 
@@ -170,9 +172,14 @@ impl LogisticsManager {
                 1000000.0, // Macro level has high capacity
             );
 
-            let sectors = macro_partitioner.partition_problem(problem);
-            println!("📦 Created {} Sectors for Titan delegation.", sectors.len());
+            let (sectors, unassigned) = macro_partitioner.partition_problem(&problem);
+            println!(
+                "📦 Created {} Sectors for Titan delegation. Unassigned: {}",
+                sectors.len(),
+                unassigned.len()
+            );
 
+            let mission_id = problem.mission_id.clone().unwrap_or(auction_id.clone());
             for sector in sectors {
                 let sub_stops: Vec<types::Stop> = problem
                     .stops
@@ -181,16 +188,34 @@ impl LogisticsManager {
                     .cloned()
                     .collect();
 
-                let sub_problem = types::Problem { stops: sub_stops, ..problem.clone() };
+                let sector_task_id = uuid::Uuid::new_v4().to_string();
+                let sub_problem = types::Problem {
+                    id: Some(sector_task_id.clone()),
+                    mission_id: Some(mission_id.clone()),
+                    stops: sub_stops,
+                    ..problem.clone()
+                };
 
-                let sector_id = format!("sector_{}", sector.id);
                 // A Sector Task is now a PARTITION task (Compute Matrix -> Partition -> Slice)
-                let req =
-                    self.generate_worker_request(sector_id.clone(), TaskType::Partition, 8192);
+                let partitioner_hash = problem
+                    .config
+                    .partitioner_hash
+                    .clone()
+                    .unwrap_or_else(|| "loxi_sector_v1".to_string());
+                let req = self.generate_worker_request(
+                    sector_task_id.clone(),
+                    &partitioner_hash,
+                    TaskType::Custom("sector".to_string()),
+                    Some(mission_id.clone()),
+                    problem.config.required_contexts.clone(),
+                    problem.config.workflow_id.clone(),
+                    "partitioning",
+                    8192,
+                );
 
-                self.pending_problems.insert(sector_id.clone(), sub_problem);
-                ids.push(sector_id.clone());
-                messages.push(self.auction_manager.create_auction(sector_id, req, None));
+                self.pending_problems.insert(sector_task_id.clone(), sub_problem);
+                ids.push(sector_task_id.clone());
+                messages.push(self.auction_manager.create_auction(sector_task_id, req, None));
             }
 
             self.save_state();
@@ -198,8 +223,9 @@ impl LogisticsManager {
         }
 
         // 2. MICRO-STAGE: For manageable problems (<5000), we partition locally directly into Routes.
-        let sub_partitions = self.core.partition(problem);
+        let sub_partitions = self.core.partition(&problem);
 
+        let mission_id = problem.mission_id.clone().unwrap_or(auction_id.clone());
         for partition in sub_partitions {
             // Reconstruct sub-problem
             let sub_stops: Vec<types::Stop> = problem
@@ -209,7 +235,11 @@ impl LogisticsManager {
                 .cloned()
                 .collect();
 
+            let sub_task_id = uuid::Uuid::new_v4().to_string();
             let sub_problem = types::Problem {
+                id: Some(sub_task_id.clone()),
+                mission_id: Some(mission_id.clone()),
+                config: problem.config.clone(),
                 stops: sub_stops,
                 vehicle: problem.vehicle.clone(),
                 fleet_size: 1,
@@ -220,23 +250,38 @@ impl LogisticsManager {
             };
 
             // Stage 2 for these partitions: MATRIX calculation
-            let sub_id = partition.id.clone();
-            let req = self.generate_worker_request(sub_id.clone(), TaskType::Matrix, 4096);
+            let matrix_hash = problem
+                .config
+                .matrix_artifact_hash
+                .clone()
+                .unwrap_or_else(|| "loxi_valhalla_v1".to_string());
+            let req = self.generate_worker_request(
+                sub_task_id.clone(),
+                &matrix_hash,
+                TaskType::Batch,
+                Some(mission_id.clone()),
+                problem.config.required_contexts.clone(),
+                problem.config.workflow_id.clone(),
+                "matrix",
+                4096,
+            );
 
             // SAVE to Stock
-            self.pending_problems.insert(sub_id.clone(), sub_problem);
-            ids.push(sub_id.clone());
+            self.pending_problems.insert(sub_task_id.clone(), sub_problem);
+            ids.push(sub_task_id.clone());
 
-            println!("🚀 [Engine] Created Matrix Task: {}", sub_id);
+            println!("🚀 [Engine] Created Matrix Task: {}", sub_task_id);
 
             // Post Matrix Task (Worker will discover via "La Sala" / Data Server)
-            messages.push(self.auction_manager.create_auction(sub_id, req, None));
+            messages.push(self.auction_manager.create_auction(sub_task_id, req, None));
         }
 
         self.save_state();
         (messages, ids)
     }
 
+    /// Step 4: Automate multi-stage pipelines (The "Conductor" Role)
+    /// Takes an incoming message and returns a list of follow-up messages.
     /// Step 4: Automate multi-stage pipelines (The "Conductor" Role)
     /// Takes an incoming message and returns a list of follow-up messages.
     pub fn handle_incoming_message(&mut self, msg: LoxiMessage) -> Vec<LoxiMessage> {
@@ -275,153 +320,157 @@ impl LogisticsManager {
                 let auction_id = solution.auction_id.clone();
                 println!("✅ Manager: Received Solution for Auction: {}", auction_id);
 
-                // --- STAGE 1: PARTITION COMPLETE (Macro or Sector) ---
-                if auction_id.contains("partition") || auction_id.contains("sector") {
-                    println!("🧬 Manager: Partition Stage Complete for {}.", auction_id);
-                    let mut outbound = Vec::new();
+                // --- PIPELINE LOGIC (Explicit Signals) ---
+                if let Some(ref next) = solution.next_action {
+                    println!("🛤️ Manager: Processing Next Action: {}", next);
+                    match next.as_str() {
+                        "matrix" => {
+                            // Stage 1 -> 2: Transition from Partitioning to Matrix
+                            println!("🧬 Manager: Partition Stage Complete for {}.", auction_id);
+                            let mut outbound = Vec::new();
 
-                    #[cfg(not(target_arch = "wasm32"))]
-                    if let Some(ref payload) = solution.payload {
-                        if let Ok(result) = serde_json::from_str::<PartitionResult>(payload) {
-                            for (i, sub_problem) in result.sub_problems.into_iter().enumerate() {
-                                let sub_id = format!("{}_s{}", auction_id, i);
+                            if let Some(ref payload) = solution.payload {
+                                if let Ok(result) = serde_json::from_str::<PartitionResult>(payload)
+                                {
+                                    if let Some(parent) = self.pending_problems.get(&auction_id) {
+                                        let mission_id = parent.mission_id.clone();
+                                        let config = parent.config.clone();
+                                        let mut sub_tasks = Vec::new();
+                                        for mut sub_problem in result.sub_problems {
+                                            let sub_task_id = uuid::Uuid::new_v4().to_string();
+                                            sub_problem.mission_id = mission_id.clone();
+                                            sub_problem.config = config.clone();
+                                            sub_problem.id = Some(sub_task_id.clone());
 
-                                let task_type = if sub_problem.distance_matrix.is_some() {
-                                    TaskType::Solve
-                                } else if sub_problem.stops.len() > 100 {
-                                    TaskType::Partition
-                                } else {
-                                    TaskType::Matrix
-                                };
+                                            let matrix_hash = config
+                                                .matrix_artifact_hash
+                                                .clone()
+                                                .unwrap_or_else(|| "loxi_valhalla_v1".to_string());
+                                            let req = self.generate_worker_request(
+                                                sub_task_id.clone(),
+                                                &matrix_hash,
+                                                TaskType::Batch,
+                                                mission_id.clone(),
+                                                config.required_contexts.clone(),
+                                                config.workflow_id.clone(),
+                                                "matrix",
+                                                4096,
+                                            );
+                                            sub_tasks.push((sub_task_id, req, sub_problem));
+                                        }
 
-                                let req =
-                                    self.generate_worker_request(sub_id.clone(), task_type, 4096);
-                                self.pending_problems.insert(sub_id.clone(), sub_problem);
-                                outbound
-                                    .push(self.auction_manager.create_auction(sub_id, req, None));
-                            }
-
-                            // SELF-HEALING: Handle unassigned jobs from partitioning
-                            if !result.unassigned_jobs.is_empty() {
-                                println!(
-                                    "⚠️ Manager: {} ORPHAN JOBS after partitioning {}. Healing...",
-                                    result.unassigned_jobs.len(),
-                                    auction_id
-                                );
-
-                                if let Some(problem) = self.pending_problems.get(&auction_id) {
-                                    let orphan_stops: Vec<_> = problem
-                                        .stops
-                                        .iter()
-                                        .filter(|s| result.unassigned_jobs.contains(&s.id))
-                                        .cloned()
-                                        .collect();
-
-                                    if !orphan_stops.is_empty() {
-                                        let healing_id = format!("{}_p_healing", auction_id);
-                                        let mut healing_problem = problem.clone();
-                                        healing_problem.stops = orphan_stops;
-                                        healing_problem.distance_matrix = None;
-                                        healing_problem.time_matrix = None;
-
-                                        let req = self.generate_worker_request(
-                                            healing_id.clone(),
-                                            TaskType::Partition,
-                                            2048,
-                                        );
-
-                                        self.pending_problems
-                                            .insert(healing_id.clone(), healing_problem.clone());
-
-                                        let domain_payload =
-                                            serde_json::to_string(&healing_problem).unwrap();
-                                        let agnostic_problem = loxi_types::Problem {
-                                            auction_id: healing_id.clone(),
-                                            domain_id: self.domain_id.clone(),
-                                            payload: Some(domain_payload),
-                                        };
-
-                                        outbound.push(LoxiMessage::PostTask {
-                                            auction_id: healing_id,
-                                            requirement: req,
-                                            payload: Some(
-                                                serde_json::to_string(&agnostic_problem).unwrap(),
-                                            ),
-                                        });
+                                        for (sub_task_id, req, sub_problem) in sub_tasks {
+                                            self.pending_problems
+                                                .insert(sub_task_id.clone(), sub_problem);
+                                            outbound.push(self.auction_manager.create_auction(
+                                                sub_task_id,
+                                                req,
+                                                None,
+                                            ));
+                                        }
                                     }
                                 }
                             }
-
                             self.save_state();
+                            return outbound;
                         }
-                    }
-                    return outbound;
-                }
-                // --- STAGE 2: MATRIX COMPLETE (Route Level) ---
-                else if (auction_id.contains("part_")
-                    || auction_id.contains("_p")
-                    || auction_id.contains("_s")
-                    || auction_id.contains("single_"))
-                    && !auction_id.contains("solve")
-                {
-                    if let Some(mut master_problem) =
-                        self.pending_problems.get(&auction_id).cloned()
-                    {
-                        println!("📊 Manager: Matrix Stage Complete for {}.", auction_id);
-
-                        if let Some(ref payload) = solution.payload {
-                            if let Ok(matrix) = serde_json::from_str::<Vec<Vec<f64>>>(payload) {
-                                master_problem.distance_matrix = Some(matrix);
-                            } else if let Ok(valhalla) = serde_json::from_str::<
-                                crate::engines::matrix::ValhallaSolution,
-                            >(payload)
+                        "solve" => {
+                            // Stage 2 -> 3: Transition from Matrix to Solve
+                            if let Some(mut master_problem) =
+                                self.pending_problems.get(&auction_id).cloned()
                             {
-                                let matrix: Vec<Vec<f64>> = valhalla
-                                    .sources_to_targets
-                                    .iter()
-                                    .map(|row| row.iter().map(|cost| cost.distance).collect())
-                                    .collect();
-                                master_problem.distance_matrix = Some(matrix);
+                                println!("📊 Manager: Matrix Stage Complete for {}.", auction_id);
+                                if let Some(ref payload) = solution.payload {
+                                    if let Ok(matrix) =
+                                        serde_json::from_str::<Vec<Vec<f64>>>(payload)
+                                    {
+                                        master_problem.distance_matrix = Some(matrix);
+                                    } else if let Ok(valhalla) =
+                                        serde_json::from_str::<
+                                            crate::engines::matrix::ValhallaSolution,
+                                        >(payload)
+                                    {
+                                        let matrix: Vec<Vec<f64>> = valhalla
+                                            .sources_to_targets
+                                            .iter()
+                                            .map(|row| {
+                                                row.iter().map(|cost| cost.distance).collect()
+                                            })
+                                            .collect();
+                                        master_problem.distance_matrix = Some(matrix);
+                                        let time_matrix: Vec<Vec<u32>> = valhalla
+                                            .sources_to_targets
+                                            .iter()
+                                            .map(|row| {
+                                                row.iter().map(|cost| cost.time as u32).collect()
+                                            })
+                                            .collect();
+                                        master_problem.time_matrix = Some(time_matrix);
+                                    }
+                                }
 
-                                let time_matrix: Vec<Vec<u32>> = valhalla
-                                    .sources_to_targets
-                                    .iter()
-                                    .map(|row| row.iter().map(|cost| cost.time as u32).collect())
-                                    .collect();
-                                master_problem.time_matrix = Some(time_matrix);
+                                let solver_hash = master_problem
+                                    .config
+                                    .solver_artifact_hash
+                                    .clone()
+                                    .unwrap_or_else(|| "loxi_vrp_artifact_v1".to_string());
+                                let solve_id = uuid::Uuid::new_v4().to_string(); // UNIQUE ID for solve stage
+                                let req = self.generate_worker_request(
+                                    solve_id.clone(),
+                                    &solver_hash,
+                                    TaskType::Compute,
+                                    master_problem.mission_id.clone(),
+                                    master_problem.config.required_contexts.clone(),
+                                    master_problem.config.workflow_id.clone(),
+                                    "solving",
+                                    1024,
+                                );
+                                let mut solve_problem = master_problem.clone();
+                                solve_problem.id = Some(solve_id.clone());
+                                self.pending_problems
+                                    .insert(solve_id.clone(), solve_problem.clone());
+                                let agnostic = loxi_types::Problem {
+                                    auction_id: solve_id.clone(),
+                                    domain_id: self.domain_id.clone(),
+                                    payload: Some(serde_json::to_string(&solve_problem).unwrap()),
+                                };
+                                self.save_state();
+                                return vec![LoxiMessage::PostTask {
+                                    auction_id: solve_id,
+                                    requirement: req,
+                                    payload: Some(serde_json::to_string(&agnostic).unwrap()),
+                                }];
                             }
                         }
-
-                        // Final VRP Solve for this specific route
-                        let solve_task_id = format!("{}_solve", auction_id);
-                        let solve_req = self.generate_worker_request(
-                            solve_task_id.clone(),
-                            TaskType::Solve,
-                            1024,
-                        );
-                        self.pending_problems.insert(solve_task_id.clone(), master_problem.clone());
-
-                        let domain_payload = serde_json::to_string(&master_problem).unwrap();
-                        let agnostic_problem = loxi_types::Problem {
-                            auction_id: solve_task_id.clone(),
-                            domain_id: self.domain_id.clone(),
-                            payload: Some(domain_payload),
-                        };
-
-                        self.save_state();
-                        return vec![LoxiMessage::PostTask {
-                            auction_id: solve_task_id,
-                            requirement: solve_req,
-                            payload: Some(serde_json::to_string(&agnostic_problem).unwrap()),
-                        }];
+                        "finish" => {
+                            // Final Stage: Save Solution
+                            println!(
+                                "🏁 Manager: Final Solver Solution received for {}.",
+                                auction_id
+                            );
+                            if let Some(mut problem) =
+                                self.pending_problems.get(&auction_id).cloned()
+                            {
+                                if let Some(ref payload) = solution.payload {
+                                    if let Ok(sol) =
+                                        serde_json::from_str::<types::Solution>(payload)
+                                    {
+                                        problem.solution = Some(sol);
+                                        self.pending_problems.insert(auction_id, problem);
+                                        self.save_state();
+                                    }
+                                }
+                            }
+                            return Vec::new();
+                        }
+                        _ => {
+                            println!("⚠️ Unknown Next Action: {}", next);
+                        }
                     }
                 }
-                // --- STAGE 3: SOLVE COMPLETE ---
-                else if auction_id.contains("solve")
-                    || auction_id.contains("_r")
-                    || auction_id.contains("_s_solve")
-                    || auction_id.contains("single_solve")
-                {
+
+                // --- LEGACY/FALLBACK LOGIC (ID-based) ---
+                if auction_id.contains("partition") || auction_id.contains("sector") {
                     println!(
                         "🏁 Manager: Final Solver Solution received for {} (Cost: {})",
                         auction_id, solution.cost
@@ -438,207 +487,65 @@ impl LogisticsManager {
                             }
                         }
                     }
-
-                    /*
-                    if !solution.unassigned_jobs.is_empty() {
-                        println!(
-                            "⚠️ Manager: {} UNASSIGNED JOBS in {}. Triggering healing auction...",
-                            solution.unassigned_jobs.len(),
-                            auction_id
-                        );
-
-                        if let Some(problem) = self.pending_problems.get(&auction_id) {
-                            let unassigned_stops: Vec<_> = problem
-                                .stops
-                                .iter()
-                                .filter(|s| solution.unassigned_jobs.contains(&s.id))
-                                .cloned()
-                                .collect();
-
-                            if !unassigned_stops.is_empty() {
-                                let healing_id = format!("{}_healing", auction_id);
-                                let mut healing_problem = problem.clone();
-                                healing_problem.stops = unassigned_stops;
-                                healing_problem.distance_matrix = None;
-                                healing_problem.time_matrix = None;
-
-                                let req = self.generate_worker_request(
-                                    healing_id.clone(),
-                                    TaskType::Solve,
-                                    1024,
-                                );
-
-                                self.pending_problems
-                                    .insert(healing_id.clone(), healing_problem.clone());
-
-                                let domain_payload =
-                                    serde_json::to_string(&healing_problem).unwrap();
-                                let agnostic_problem = loxi_types::Problem {
-                                    auction_id: healing_id.clone(),
-                                    domain_id: self.domain_id.clone(),
-                                    payload: Some(domain_payload),
-                                };
-
-                                self.save_state();
-                                return vec![LoxiMessage::PostTask {
-                                    auction_id: healing_id,
-                                    requirement: req,
-                                    payload: Some(
-                                        serde_json::to_string(&agnostic_problem).unwrap(),
-                                    ),
-                                }];
-                            }
-                        }
-                    }
-                    */
-
                     return Vec::new();
                 }
-
                 Vec::new()
             }
             LoxiMessage::AuctionClosed { auction_id, winner_id, .. } => {
                 println!("🔨 Manager: Auction {} CLOSED. Winner: {}", auction_id, winner_id);
                 Vec::new()
             }
+            LoxiMessage::PushData { auction_id, progress, .. } => {
+                println!("📈 Manager: Data Pushed for {}: {}%", auction_id, progress * 100.0);
+                Vec::new()
+            }
+            LoxiMessage::UpdateMissionStatus { mission_id, status, .. } => {
+                println!("🚩 Manager: Mission {} Status -> {}", mission_id, status);
+                Vec::new()
+            }
+            // Agnostic safety: Catch all other messages to satisfy the compiler
             _ => Vec::new(),
         }
     }
+}
 
-    /// Step 5: Start a Direct Data Server (The "Sala" / Private Room)
-    /// This allows workers to connect directly to the Architect for data exchange.
-    #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
-    pub async fn start_data_server(
-        self_arc: Arc<Mutex<Self>>,
-        port: u16,
-        orchestrator_tx: mpsc::Sender<LoxiMessage>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let addr = format!("0.0.0.0:{}", port);
-        let listener = tokio::net::TcpListener::bind(&addr).await?;
-        println!("🔒 Direct Data Server (The Sala) listening on: {}", addr);
+pub struct LogisticsDataProvider {
+    pub manager: Arc<Mutex<LogisticsManager>>,
+}
 
-        while let Ok((stream, addr)) = listener.accept().await {
-            println!("🔌 Data Server: Incoming connection from {}", addr);
-            let manager = self_arc.clone();
-            let tx = orchestrator_tx.clone();
-            tokio::spawn(async move {
-                if let Err(e) = Self::handle_worker_direct(stream, manager, tx).await {
-                    println!("❌ Error handling direct worker {}: {}", addr, e);
-                }
-            });
-        }
-        Ok(())
+#[async_trait]
+impl DataProvider for LogisticsDataProvider {
+    async fn get_payload(&self, auction_id: &str) -> Option<String> {
+        let mg = self.manager.lock().await;
+        mg.pending_problems.get(auction_id).and_then(|p| serde_json::to_string(p).ok())
     }
 
-    #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
-    async fn handle_worker_direct(
-        stream: tokio::net::TcpStream,
-        manager: Arc<Mutex<Self>>,
-        orchestrator_tx: mpsc::Sender<LoxiMessage>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        use futures_util::{SinkExt, StreamExt};
-        use tokio_tungstenite::accept_async;
+    async fn handle_solution(&self, solution: loxi_core::Solution) -> Vec<LoxiMessage> {
+        let mut mg = self.manager.lock().await;
+        mg.handle_incoming_message(loxi_core::Message::SubmitSolution(solution))
+    }
 
-        let ws_stream = accept_async(stream).await?;
-        let (mut sink, mut read) = ws_stream.split();
+    async fn handle_push_data(
+        &self,
+        auction_id: String,
+        payload: String,
+        progress: f32,
+    ) -> Vec<LoxiMessage> {
+        let mut mg = self.manager.lock().await;
+        mg.handle_incoming_message(loxi_core::Message::PushData { auction_id, payload, progress })
+    }
 
-        let (tx, mut rx) = mpsc::channel::<tokio_tungstenite::tungstenite::Message>(32);
-
-        tokio::spawn(async move {
-            while let Some(msg) = rx.recv().await {
-                if sink.send(msg).await.is_err() {
-                    break;
-                }
-            }
-        });
-
-        println!("⏳ Data Server: Waiting for message from worker...");
-        while let Some(msg_result) = read.next().await {
-            match msg_result {
-                Ok(msg) => {
-                    if msg.is_text() {
-                        if let Ok(text) = msg.to_text() {
-                            if let Ok(loxi_msg) = serde_json::from_str::<LoxiMessage>(text) {
-                                match loxi_msg {
-                                    LoxiMessage::DiscoverAuthority { domain_id: auction_id } => {
-                                        let mut mg = manager.lock().await;
-
-                                        // DEBUG: Log the request and available keys
-                                        println!(
-                                            "🔍 Data Server: Worker requested payload for ID: {}",
-                                            auction_id
-                                        );
-                                        if !mg.pending_problems.contains_key(&auction_id) {
-                                            println!("⚠️ Data Server: ID {} NOT FOUND. Cache has {} items. Keys: {:?}", 
-                                                auction_id, mg.pending_problems.len(), mg.pending_problems.keys().take(10).collect::<Vec<_>>());
-                                        }
-
-                                        mg.active_rooms
-                                            .entry(auction_id.clone())
-                                            .or_default()
-                                            .push(tx.clone());
-
-                                        if let Some(problem) = mg.pending_problems.get(&auction_id)
-                                        {
-                                            println!(
-                                                "📤 Data Server: Sending payload for ID: {}",
-                                                auction_id
-                                            );
-                                            let domain_payload = serde_json::to_string(problem)?;
-                                            let agnostic = loxi_types::Problem {
-                                                auction_id: auction_id.clone(),
-                                                domain_id: "logistics".to_string(),
-                                                payload: Some(domain_payload),
-                                            };
-                                            let _ = tx
-                                                .send(
-                                                    tokio_tungstenite::tungstenite::Message::Text(
-                                                        serde_json::to_string(&agnostic)?,
-                                                    ),
-                                                )
-                                                .await;
-                                        } else {
-                                            // FAST FAIL: Tell the worker the data is missing
-                                            let error_msg = serde_json::json!({
-                                                "error": format!("Payload for ID {} not found in Architect memory", auction_id),
-                                                "auction_id": auction_id
-                                            });
-                                            let _ = tx
-                                                .send(
-                                                    tokio_tungstenite::tungstenite::Message::Text(
-                                                        error_msg.to_string(),
-                                                    ),
-                                                )
-                                                .await;
-                                        }
-                                    }
-                                    LoxiMessage::SubmitSolution(solution) => {
-                                        let auction_id = solution.auction_id.clone();
-                                        println!("📥 Received Solution in Room: {}", auction_id);
-
-                                        let outbound_msgs = {
-                                            let mut mg = manager.lock().await;
-                                            mg.handle_incoming_message(LoxiMessage::SubmitSolution(
-                                                solution,
-                                            ))
-                                        };
-
-                                        if !outbound_msgs.is_empty() {
-                                            for out_msg in outbound_msgs {
-                                                let _ = orchestrator_tx.send(out_msg).await;
-                                            }
-                                            println!("⚡ Room Submission: {} -> Next tasks published to Grid.", auction_id);
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => break,
-            }
-        }
-        Ok(())
+    async fn handle_mission_status(
+        &self,
+        mission_id: String,
+        status: String,
+        details: Option<String>,
+    ) -> Vec<LoxiMessage> {
+        let mut mg = self.manager.lock().await;
+        mg.handle_incoming_message(loxi_core::Message::UpdateMissionStatus {
+            mission_id,
+            status,
+            details,
+        })
     }
 }

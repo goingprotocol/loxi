@@ -7,11 +7,12 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum TaskType {
-    Matrix,    // High RAM required (Distance pre-computation)
-    Solve,     // CPU/GPU required (Route optimization)
-    Partition, // Analysis required (Problem subdivision)
+    Compute,        // General purpose CPU task
+    Storage,        // Data-heavy / I/O task
+    Batch,          // Specialized Batch/Group task (Formerly Matrix)
+    Custom(String), // Domain-specific custom task types
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +34,12 @@ pub struct TaskRequirement {
     pub min_ram_mb: u64,
     pub use_gpu: bool,
     pub task_type: TaskType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mission_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,9 +70,10 @@ pub struct Solution {
     pub worker_id: String,
     pub result_hash: String,
     pub cost: f64,
-    pub unassigned_jobs: Vec<String>,
     pub content_type: String,
     pub payload: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_action: Option<String>,
 
     // FUTURE: Consensus Validation & Slashing
     // When enabled, multiple workers solve with different seeds
@@ -114,8 +122,14 @@ pub enum Message {
     },
     // SDK -> Grid
     SubmitBid(Bid),
-    // SDK -> Grid
+    // SDK -> Grid: Final solution submission
     SubmitSolution(Solution),
+    // SDK -> Grid: Push arbitrary data or partial results (streaming, telemetry, etc.)
+    PushData {
+        auction_id: String,
+        payload: String,
+        progress: f32,
+    },
 
     // Orchestrator -> Grid: Notifica quién ganó basado en el mejor costo/hash
     AuctionClosed {
@@ -128,6 +142,13 @@ pub enum Message {
     ConsensusReached {
         auction_id: String,
         winner_id: String,
+    },
+
+    // Mission Lifecycle Management
+    UpdateMissionStatus {
+        mission_id: String,
+        status: String, // e.g., "Starting", "In Progress", "Completed", "Failed"
+        details: Option<String>,
     },
 
     // Phase 4: Control & Status
@@ -223,7 +244,10 @@ mod tests {
             context_hashes: vec![],
             min_ram_mb: 4000,
             use_gpu: true,
-            task_type: TaskType::Solve,
+            task_type: TaskType::Compute,
+            mission_id: None,
+            workflow_id: None,
+            state: None,
         };
 
         // Should pick gaming_pc
@@ -261,11 +285,26 @@ mod tests {
             context_hashes: vec!["target_data".to_string()],
             min_ram_mb: 2000,
             use_gpu: false,
-            task_type: TaskType::Solve,
+            task_type: TaskType::Compute,
+            mission_id: None,
+            workflow_id: None,
+            state: None,
         };
 
         // Even though PC is more powerful, the phone has the data affinity!
         let assignment = OrchestratorLogic::select_best_node(&nodes, &req).unwrap();
         assert_eq!(assignment.node_id, "expert_phone");
+    }
+
+    #[test]
+    fn test_task_type_serialization() {
+        let compute = TaskType::Compute;
+        let custom = TaskType::Custom("partitioner".to_string());
+
+        let s_compute = serde_json::to_string(&compute).unwrap();
+        let s_custom = serde_json::to_string(&custom).unwrap();
+
+        assert_eq!(s_compute, "\"Compute\"");
+        assert_eq!(s_custom, "{\"Custom\":\"partitioner\"}");
     }
 }

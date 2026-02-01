@@ -35,15 +35,8 @@ echo "Press Ctrl+C to stop"
 echo ""
 
 cd "$(dirname "$TILES_DIR")"
-python3 -m http.server 8080 --bind 0.0.0.0 &
-SERVER_PID=$!
 
-# Enable CORS by adding headers (Python 3.7+)
-# Note: Simple HTTP server doesn't support CORS natively
-# Using a workaround with socat or switching to a CORS-enabled server
-
-# Kill the simple server and use a CORS-enabled one
-kill $SERVER_PID 2>/dev/null
+# Create a simple CORS-enabled server with Range Support
 
 # Create a simple CORS-enabled server
 python3 << 'EOF'

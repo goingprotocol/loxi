@@ -19,9 +19,11 @@ serde-wasm-bindgen = "0.5"
 serde_json = "1.0"
 loxi-core = { path = "../loxi-core" }
 loxi-types = { path = "../loxi-types" }
+loxi-architect-sdk = { path = "../loxi-architect-sdk" }
 vrp-pragmatic = { version = "1.18", default-features = false } # Core solver
 h3o = "0.3"
 rand = "0.8"
+async-trait = "0.1"
 lazy_static = "1.4"
 lru = "0.12"
 getrandom = { version = "0.2", features = ["js"] } # Essential for Rand + WASM

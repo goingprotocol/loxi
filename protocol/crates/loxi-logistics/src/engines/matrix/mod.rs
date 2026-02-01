@@ -2,7 +2,7 @@ use crate::manager::types::{Location, Problem};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ValhallaMatrixRequest {
+pub struct ValhallaProblem {
     pub sources: Vec<Location>,
     pub targets: Vec<Location>,
     pub costing: String,
@@ -60,7 +60,7 @@ impl MatrixEngine {
         }
 
         // 2. Build Valhalla Request
-        let request = ValhallaMatrixRequest {
+        let request = ValhallaProblem {
             sources: locations.clone(),
             targets: locations.clone(),
             costing: "auto".to_string(), // TODO: Support other costing types

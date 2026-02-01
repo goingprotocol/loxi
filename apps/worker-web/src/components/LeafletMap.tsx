@@ -20,11 +20,12 @@ interface LeafletMapProps {
         end_location?: Location;
     };
     shape?: string; // Encoded polyline from Valhalla
+    stopAssignments?: Record<string, string>; // { stop_id: color }
 }
 
 const COLORS = ['#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#06b6d4'];
 
-const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle, shape }) => {
+const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle, shape, stopAssignments }) => {
     const mapContainerRef = useRef<HTMLDivElement>(null);
     const mapInstance = useRef<L.Map | null>(null);
     const markersLayer = useRef<L.LayerGroup | null>(null);
@@ -146,13 +147,15 @@ const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle, shape }
             // Add Markers (Circle style like Google Maps version)
             stops.forEach((stop) => {
                 if (!stop.location) return;
+                const assignmentColor = stopAssignments?.[stop.id];
                 const marker = L.circleMarker([stop.location.lat, stop.location.lon], {
-                    radius: 6,
-                    fillColor: '#3b82f6',
-                    color: '#ffffff',
-                    weight: 1,
+                    radius: 7,
+                    fillColor: assignmentColor || '#3b82f6',
+                    color: assignmentColor ? '#ffffff' : '#ffffff',
+                    weight: assignmentColor ? 2 : 1,
                     opacity: 1,
-                    fillOpacity: 1
+                    fillOpacity: 1,
+                    className: assignmentColor ? 'worker-pulse' : ''
                 }).bindTooltip(stop.id, { permanent: false, direction: 'top' });
 
                 markersLayer.current?.addLayer(marker);
@@ -218,7 +221,7 @@ const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle, shape }
             });
         }
 
-    }, [stops, routes, vehicle, shape]);
+    }, [stops, routes, vehicle, shape, stopAssignments]);
 
     return (
         <div

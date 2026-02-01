@@ -286,3 +286,14 @@ button.dispatch-btn {
   font-weight: 900;
   pointer-events: none;
 }
+
+/* WORKER PULSE ANIMATION */
+@keyframes pulse {
+  0% { stroke-width: 1; opacity: 1; }
+  50% { stroke-width: 8; opacity: 0.5; }
+  100% { stroke-width: 1; opacity: 1; }
+}
+
+.worker-pulse {
+  animation: pulse 2s infinite ease-out;
+}

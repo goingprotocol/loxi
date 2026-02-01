@@ -6,6 +6,7 @@ members = [
     "crates/loxi-compute",
     "crates/loxi-cli",
     "crates/loxi-core", "crates/loxi-orchestrator",
+    "crates/loxi-architect-sdk",
     "crates/loxi-logistics/artifacts/vrp",
     "crates/loxi-logistics/artifacts/partitioner",
     "crates/loxi-logistics/artifacts/matrix",

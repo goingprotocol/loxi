@@ -1,0 +1,42 @@
+# Architecture Evolution Plan: Loxi 2.0.1 (Liquid Infrastructure)
+
+Este plan detalla los pasos para profesionalizar la arquitectura de Loxi, separando la lógica de red de la lógica de negocios y preparando el sistema para el modelo de "Consenso y Verificación".
+
+## 1. El Núcleo de la Verdad (Loxi-Core) & Orchestrator
+El objetivo es que el `loxi-core` sea 100% agnóstico y actúe como la "gramática" del sistema.
+
+*   **Acción:** Revisar el enum [Message](file:///Users/sergiosolis/Programacion/going/loxi/protocol/target/wasm32-unknown-emscripten/debug/pkg/loxi_logistics.js#3951-3984) para que soporte cualquier `domain_id`.
+*   **Implicancia:** Modificar el `loxi-core` requiere actualizar en cascada el **Orquestador**, el **Worker** y los **Architects**. Es un cambio de "lenguaje".
+*   **Riesgo:** Alto, pero necesario ahora. Si no lo hacemos hoy, Loxi quedará atrapado en el dominio de "Logística" para siempre.
+
+## 2. Loxi-Architect-SDK (El nuevo rol "Requestor")
+Mover la lógica de "La Sala" y la conexión de datos de `loxi-logistics` a un SDK universal.
+
+*   **[NUEVA CRATE] `loxi-architect-sdk`:**
+    *   **DataPort Server:** El código de "La Sala" (TCP/WebSocket) para servir datos pesados.
+    *   **TaskBroadcaster:** Lógica para hablar con el Orquestador y pedir subastas.
+    *   **Consensus Manager:** Lógica para recibir 3 resultados, comparar hashes y detectar mentirosos.
+
+## 3. Consensus & Seeded Tasks (Trust but Verify)
+Implementar el sistema de validación que discutimos.
+
+*   **Etapa A (Logística):** Pasar el `u64` del seed al motor de VRP interno. Hoy se recibe pero no se usa.
+*   **Etapa B (Orquestador):** Permitir que un Architect diga: *"Necesito 3 ganadores para esta subasta"*.
+*   **Etapa C (Merge/Refine):** Función de "desempate" que elija la mejor solución o detecte incompatibilidades si los hashes de la misma semilla no coinciden.
+
+## 4. Modularización de Artefactos (`loxi-logistics`)
+Limpiar el "Frankenstein" de [lib.rs](file:///Users/sergiosolis/Programacion/going/loxi/protocol/crates/loxi-core/src/lib.rs).
+
+*   **`src/wasm.rs`:** Solo el pegamento con `wasm_bindgen`.
+*   **`src/ffi.rs`:** Solo el pegamento con C-ABI (para el EXE/SDK nativo).
+*   **`src/solve.rs`:** Lógica pura de VRP, agnóstica a la plataforma.
+
+## 5. El Futuro de los Datos (LazyFS & Sharding)
+*   **LazyFS por Elección:** Mantener LazyFS como una herramienta opcional del SDK. Las empresas eligen qué assets mapear (Tiles, Videos, Modelos IA) para streaming on-demand.
+*   **Data Sharding:** Preparar el Orquestador para que el Architect no envíe el "link a 10GB", sino "links a 100 pedazos de 100MB", permitiendo que los nodos se repartan el trabajo.
+
+## Próximos Pasos (Orden de ejecución Sugerido)
+1.  **Auditoría de Protocolo:** Asegurar que `loxi-core` no tenga nada de logística.
+2.  **Creación de `loxi-architect-sdk`:** Extraer "La Sala".
+3.  **Refactor de [lib.rs](file:///Users/sergiosolis/Programacion/going/loxi/protocol/crates/loxi-core/src/lib.rs):** Separar WASM de FFI.
+4.  **Implementación de Consensus:** Activar las seeds y la verificación doble.
