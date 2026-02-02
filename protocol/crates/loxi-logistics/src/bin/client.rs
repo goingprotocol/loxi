@@ -12,6 +12,8 @@ const DEFAULT_PUBLIC_URL: &str = "ws://localhost:3006"; // e.g., "wss://logistic
 
 #[tokio::main]
 async fn main() {
+    dotenv::dotenv().ok();
+
     // 1. Configuration: Env Vars > Defaults
     let connect_addr = std::env::var("LOXI_ORCHESTRATOR_URL")
         .unwrap_or_else(|_| DEFAULT_ORCHESTRATOR_URL.to_string());
@@ -114,24 +116,51 @@ async fn main() {
             .and_then(move |params: std::collections::HashMap<String, String>| {
                 let manager = manager_for_http.clone();
                 async move {
+                    let mg = manager.lock().await;
+
                     if let Some(mission_id) = params.get("mission_id") {
-                        let mg = manager.lock().await;
-                        let solutions: Vec<_> = mg
+                        let solutions: std::collections::HashMap<String, serde_json::Value> = mg
                             .pending_problems
-                            .values()
-                            .filter(|p| p.mission_id.as_deref() == Some(mission_id))
-                            .filter_map(|p| p.solution.as_ref())
+                            .iter()
+                            .filter(|(_, p)| p.mission_id.as_deref() == Some(mission_id))
+                            .filter_map(|(id, p)| {
+                                p.solution.as_ref().map(|sol| {
+                                    // INJECT ID and MISSION_ID for the UI
+                                    let mut val = serde_json::to_value(sol).unwrap();
+                                    if let Some(obj) = val.as_object_mut() {
+                                        obj.insert(
+                                            "id".to_string(),
+                                            serde_json::Value::String(id.clone()),
+                                        );
+                                        if let Some(ref m_id) = p.mission_id {
+                                            obj.insert(
+                                                "mission_id".to_string(),
+                                                serde_json::Value::String(m_id.clone()),
+                                            );
+                                        }
+                                    }
+                                    (id.clone(), val)
+                                })
+                            })
                             .collect();
                         return Ok::<_, warp::Rejection>(warp::reply::json(&solutions));
                     }
+
                     if let Some(id) = params.get("auction_id") {
-                        let mg = manager.lock().await;
                         if let Some(problem) = mg.pending_problems.get(id) {
                             if let Some(ref solution) = problem.solution {
-                                return Ok::<_, warp::Rejection>(warp::reply::json(&solution));
+                                let mut val = serde_json::to_value(solution).unwrap();
+                                if let Some(obj) = val.as_object_mut() {
+                                    obj.insert(
+                                        "id".to_string(),
+                                        serde_json::Value::String(id.clone()),
+                                    );
+                                }
+                                return Ok::<_, warp::Rejection>(warp::reply::json(&val));
                             }
                         }
                     }
+
                     Ok::<_, warp::Rejection>(warp::reply::json(&serde_json::json!({
                         "status": "pending"
                     })))
@@ -179,7 +208,7 @@ async fn main() {
                             Err(e) => {
                                 // DEBUG: If it's a PostTask or SubmitSolution that we care about, show why it failed.
                                 if text.contains("PostTask") || text.contains("Submit") {
-                                    println!("⚠️ Protocol Mismatch: {}\nText: {}", e, text);
+                                    println!("⚠️ Protocol Mismatch: {}\nText Preview: {}", e, &text[..std::cmp::min(100, text.len())]);
                                 }
                             }
                         }

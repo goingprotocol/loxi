@@ -40,8 +40,10 @@ type Lease = {
   auction_id: string
   worker_id: string
   architect_address: string
-  artifact_hash: string
-  task_type: string | { Custom: string } | { Compute: null } | { Storage: null } | { Matrix: null }
+  task_type: string | { Custom: string } | { Compute: null } | { Proxy: null }
+  ticket: string
+  affinities?: string[]
+  metadata?: [string, string][]
 }
 
 const DEFAULT_ORCHESTRATOR = "ws://localhost:3005"
@@ -66,6 +68,9 @@ function App() {
   const activeLeaseRef = useRef<Lease | null>(null) // Prevents race conditions
   const isBiddingRef = useRef<boolean>(false) // Prevents multi-bid concurrency
   const logsEndRef = useRef<HTMLDivElement>(null)
+
+  // COMMIT-REVEAL STATE
+  const pendingResultRef = useRef<{ auction_id: string, ticket: string, payload: string, architect_address?: string } | null>(null);
 
   useEffect(() => {
     // Auto-scroll logs
@@ -148,6 +153,7 @@ function App() {
             // BUSY CHECK: If we are already working, ignore new requests
             // BUSY CHECK: If we are already working OR bidding, ignore new requests
             if (activeLeaseRef.current || isBiddingRef.current) {
+              // console.log("Skipping Bid: Busy or already bidding.");
               return;
             }
 
@@ -155,7 +161,8 @@ function App() {
               ? req.requirement.task_type
               : JSON.stringify(req.requirement.task_type);
 
-            addLog(`📡 [${req.requirement.state?.toUpperCase() || 'BUS'}] Task Broadcast: ${taskTypeDisplay} (${req.requirement.min_ram_mb}MB Required)`)
+            const artifactHash = req.requirement.affinities.find((a: string) => a.startsWith("loxi_")) || "unknown";
+            addLog(`📡 Task Broadcast: ${taskTypeDisplay} [${artifactHash}] (${req.requirement.min_ram_mb}MB Required)`)
 
             if (req.payload) {
               payloadRef.current = req.payload; // IMMEDIATE ACCESS
@@ -191,8 +198,32 @@ function App() {
               ? tt
               : (typeof tt === 'object' && tt !== null && 'Custom' in tt ? tt.Custom : Object.keys(tt)[0]);
 
-            addLog(`WON LEASE! [${lease.state?.toUpperCase() || 'BUSY'}] Executing Task: ${taskTypeDisplay} `, "success")
-            runArtifact(lease, payloadRef.current); // USE REF FOR IMMEDIATE ACCESS
+            addLog(`WON LEASE! Executing Task: ${taskTypeDisplay} `, "success")
+            runArtifact(lease, null); // STRICT SEPARATION: No Payload from Lease
+          }
+
+          if (msg.RevealRequest) {
+            const req = msg.RevealRequest;
+            addLog(`🔓 Reveal Request Received for ${req.auction_id}. Pushing Data...`, "action");
+
+            const pending = pendingResultRef.current;
+            if (pending && pending.auction_id === req.auction_id) {
+              // PUSH DATA TO ARCHITECT
+              const targetAddr = req.destination !== "architect_lookup_pending" ? req.destination : pending.architect_address;
+              if (targetAddr) {
+                const archSocket = new WebSocket(targetAddr);
+                archSocket.onopen = () => {
+                  archSocket.send(JSON.stringify({
+                    PushSolution: {
+                      auction_id: pending.auction_id,
+                      ticket: pending.ticket,
+                      payload: pending.payload
+                    }
+                  }));
+                  setTimeout(() => archSocket.close(), 500);
+                };
+              }
+            }
           }
 
           if (msg.SubmitSolution) {
@@ -219,7 +250,9 @@ function App() {
     if (!nodeSpecs) return;
     setStatus("EXECUTING")
     let interval = setInterval(() => setCores(prev => prev.map(() => Math.random() * 100)), 100)
-    const hash = lease.artifact_hash;
+
+    // RECOVER ARTIFACT HASH FROM LEASE (Agnostic)
+    let hash = lease.affinities?.find(a => a.startsWith("loxi_")) || "";
 
     try {
       if (initialPayload) setActivePayload(initialPayload);
@@ -233,7 +266,7 @@ function App() {
         archAddr = archAddr.replace("192.168.0.196", "localhost");
       }
 
-      // OPTIMIZATION: Only fetch from Data Stream if payload is missing
+      // MANDATORY: Fetch from Data Stream (Direct Pull)
       if (!finalPayload && archAddr !== "grid://orchestrator") {
         addLog(`🔒 Joining Direct Data Stream: ${archAddr} `, "action");
         const salaSocket = new WebSocket(archAddr);
@@ -241,11 +274,13 @@ function App() {
           // FIX: Use LEASE AUCTION ID to request the specific problem data
           salaSocket.onopen = () => {
             console.log(`🔌 Connected to Data Server. Requesting: ${lease.auction_id}`);
-            salaSocket.send(JSON.stringify({ DiscoverAuthority: { domain_id: lease.auction_id } }));
+            console.log("🎟️ Authenticating with Ticket...");
+            salaSocket.send(JSON.stringify({ ClaimTask: { auction_id: lease.auction_id, ticket: lease.ticket } }));
           };
           salaSocket.onmessage = (e) => {
             console.log(`📥 Received Data (${e.data.length} bytes)`);
             resolve(e.data);
+            salaSocket.close(); // Close after fetch
           };
           salaSocket.onerror = (err) => {
             console.error("Data Socket Error:", err);
@@ -272,13 +307,38 @@ function App() {
       let unwrappedPayload = payload;
       try {
         const parsed = JSON.parse(payload);
-        if (parsed.domain_id && parsed.payload && typeof parsed.payload === 'string') {
+        if (parsed.PostTask && parsed.PostTask.payload) {
+          console.log("🎁 Unwrapping Loxi Protocol Envelope (PostTask)...");
+          unwrappedPayload = parsed.PostTask.payload;
+        } else if (parsed.domain_id && parsed.payload && typeof parsed.payload === 'string') {
           console.log("🎁 Unwrapping Agnostic Payload...");
           unwrappedPayload = parsed.payload;
         }
       } catch (e) { /* Not a JSON envelope, proceed as raw */ }
 
+      // Double-check unwrapping if nested
+      if (typeof unwrappedPayload === 'string' && (unwrappedPayload.startsWith('{') || unwrappedPayload.startsWith('['))) {
+        try {
+          // Peek inside to see if we need another layer of unwrap (rare edge case)
+          const deep = JSON.parse(unwrappedPayload);
+          if (deep.PostTask && deep.PostTask.payload) unwrappedPayload = deep.PostTask.payload;
+        } catch (e) { }
+      }
+
       console.log("📦 [APP-DEBUG] Unwrapped Payload Preview:", unwrappedPayload.substring(0, 500));
+
+      // FINAL HASH RECOVERY (If still missing)
+      if (!hash) {
+        try {
+          const parsed = JSON.parse(unwrappedPayload);
+          hash = parsed.artifact_hash || parsed.hash || "";
+        } catch (e) { }
+      }
+
+      if (!hash) {
+        addLog("❌ Error: Could not resolve Artifact Hash from payload.", "error");
+        throw new Error("Missing Artifact Hash");
+      }
 
       // ============================================================
       // 🧠 SMART TILE LOADING STRATEGY
@@ -453,6 +513,12 @@ function App() {
           addLog(`📊 Matrix Result: ${dist}km / ${time}s`, "success");
         }
         setActiveShape(null);
+      } else if (sol.route && sol.route.length > 0) {
+        // Solve success display
+        const stopCount = sol.route.length;
+        const cost = sol.cost?.toFixed(1) || 0;
+        addLog(`🏆 Solve Result: ${stopCount} stops / Efficiency ${cost}`, "success");
+        setActiveShape(null);
       } else {
         setActiveShape(null);
       }
@@ -464,18 +530,37 @@ function App() {
           : hash === "loxi_vrp_artifact_v1" ? "finish"
             : undefined;
 
+      const finalPayloadString = wasmResponse.payload
+        ? (typeof wasmResponse.payload === 'string' ? wasmResponse.payload : JSON.stringify(wasmResponse.payload))
+        : JSON.stringify(wasmResponse);
+
+      // 1. STORE RESULT (COMMIT)
+      pendingResultRef.current = {
+        auction_id: lease.auction_id,
+        ticket: lease.ticket || "",
+        payload: finalPayloadString, // Full Payload
+        // We also need the architect address to push to later
+        // Hack: we attach it here or use the one from RevealRequest if provided
+        // Let's attach it to the object for safety
+        // @ts-ignore
+        architect_address: lease.architect_address
+      };
+
+      const metadata = [
+        ["state", "finished"],
+        ["duration_ms", duration.toString()],
+        ["next_action", nextAction || "none"]
+      ];
+
+      // 2. CONTROL PLANE: Signal Completion (HASH ONLY)
+      addLog("🔒 Committing Solution Hash to Orchestrator...", "action");
       wsRef.current?.send(JSON.stringify({
         SubmitSolution: {
           auction_id: lease.auction_id,
           worker_id: nodeSpecs.id,
-          result_hash: wasmResponse.hash || "generated",
-          cost: wasmResponse.cost || 0,
-          unassigned_jobs: wasmResponse.unassigned_jobs || [],
-          content_type: "application/json",
-          payload: wasmResponse.payload
-            ? (typeof wasmResponse.payload === 'string' ? wasmResponse.payload : JSON.stringify(wasmResponse.payload))
-            : JSON.stringify(wasmResponse),
-          next_action: nextAction
+          result_hash: wasmResponse.hash || "generated", // Hash
+          payload: null,
+          metadata
         }
       }));
 
@@ -515,17 +600,26 @@ function App() {
           const pollInterval = setInterval(async () => {
             try {
               const solRes = await fetch(`http://localhost:3007/get-solution?mission_id=${missionId}`);
-              const solutions = await solRes.json();
+              const solutionsMap = await solRes.json();
 
-              if (Array.isArray(solutions) && solutions.length > 0) {
+              // Handle both legacy Array and new HashMap semantic
+              const solutions = Array.isArray(solutionsMap) ? solutionsMap : Object.values(solutionsMap);
+
+              if (solutions.length > 0) {
                 let resolvedCount = 0;
                 solutions.forEach((sol: any) => {
-                  const id = sol.auction_id || sol.id;
+                  const id = sol.id || sol.auction_id;
                   if (id && (sol.routes || sol.route)) {
-                    setActiveSolutions(prev => ({
-                      ...prev,
-                      [id]: sol
-                    }));
+                    // Log if it's new
+                    setActiveSolutions(prev => {
+                      if (!prev[id]) {
+                        addLog(`📦 Partition Resolved: ${id.split('-')[0]}...`, "success");
+                      }
+                      return {
+                        ...prev,
+                        [id]: sol
+                      };
+                    });
                     resolvedCount++;
                   }
                 });
@@ -602,7 +696,7 @@ function App() {
   }
 
   const currentRoutes: string[][] = Object.entries(activeSolutions)
-    .filter(([id, _]) => (id.startsWith(currentMission) || !currentMission))
+    .filter(([id, sol]: [string, any]) => (id.startsWith(currentMission) || sol.mission_id === currentMission || !currentMission))
     .map(([_, sol]: [string, any]) => {
       let route: string[] = [];
       if (sol.routes && sol.routes[0] && sol.routes[0].stops) {
@@ -621,7 +715,7 @@ function App() {
 
   const stopAssignments: Record<string, string> = {};
   Object.entries(activeSolutions)
-    .filter(([id, _]) => id.startsWith(currentMission) || !currentMission)
+    .filter(([id, sol]: [string, any]) => id.startsWith(currentMission) || sol.mission_id === currentMission || !currentMission)
     .forEach(([_, sol]: [string, any]) => {
       const workerId = sol.worker_id;
       if (workerId) {

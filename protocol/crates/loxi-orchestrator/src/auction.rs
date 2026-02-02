@@ -25,11 +25,12 @@ pub enum AuctionStatus {
 
 pub struct AuctionManager {
     auctions: HashMap<String, Auction>,
+    pub node_states: HashMap<String, String>, // "IDLE" or "BUSY"
 }
 
 impl AuctionManager {
     pub fn new() -> Self {
-        Self { auctions: HashMap::new() }
+        Self { auctions: HashMap::new(), node_states: HashMap::new() }
     }
 
     /// Create a new auction for a specific task requirement
@@ -69,6 +70,13 @@ impl AuctionManager {
                 return Err("Auction is closed".to_string());
             }
 
+            // Stateful Check: Is the worker busy?
+            if let Some(state) = self.node_states.get(&bid.worker_id) {
+                if state == "BUSY" {
+                    return Err("Worker is BUSY".to_string());
+                }
+            }
+
             // Basic validation: Does the worker meet the hard requirements?
             if bid.specs.ram_mb < auction.requirement.min_ram_mb {
                 return Err("Worker does not meet RAM requirements".to_string());
@@ -97,6 +105,10 @@ impl AuctionManager {
             {
                 auction.status = AuctionStatus::Assigned(assignment.node_id.clone());
                 auction.assigned_at = Some(Self::now());
+
+                // Mark Node as BUSY
+                self.node_states.insert(assignment.node_id.clone(), "BUSY".to_string());
+
                 Some(assignment)
             } else {
                 None
@@ -165,5 +177,9 @@ impl AuctionManager {
     fn now() -> u64 {
         use std::time::{SystemTime, UNIX_EPOCH};
         SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
+    }
+
+    pub fn set_node_idle(&mut self, node_id: &str) {
+        self.node_states.insert(node_id.to_string(), "IDLE".to_string());
     }
 }

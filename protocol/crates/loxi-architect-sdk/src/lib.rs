@@ -25,6 +25,8 @@ pub trait DataProvider: Send + Sync {
         status: String,
         details: Option<String>,
     ) -> Vec<LoxiMessage>;
+
+    async fn handle_solution_push(&self, auction_id: String, payload: String) -> Vec<LoxiMessage>;
 }
 
 /// Generic container for grouping related tasks.
@@ -95,9 +97,124 @@ impl<P: DataProvider + 'static> DataServer<P> {
                 Ok(msg) => {
                     if msg.is_text() {
                         if let Ok(text) = msg.to_text() {
-                            if let Ok(loxi_msg) = serde_json::from_str::<LoxiMessage>(text) {
-                                match loxi_msg {
+                            match serde_json::from_str::<LoxiMessage>(text) {
+                                Ok(loxi_msg) => match loxi_msg {
+                                    LoxiMessage::PushSolution { auction_id, ticket, payload } => {
+                                        let public_key_pem =
+                                            std::env::var("RSA_PUBLIC_KEY").unwrap_or_default();
+                                        let decoding_key = jsonwebtoken::DecodingKey::from_rsa_pem(
+                                            public_key_pem.as_bytes(),
+                                        )
+                                        .unwrap_or_else(|_| {
+                                            jsonwebtoken::DecodingKey::from_secret(b"secret")
+                                        });
+
+                                        let mut validation = jsonwebtoken::Validation::new(
+                                            jsonwebtoken::Algorithm::RS256,
+                                        );
+                                        validation.set_audience(&[auction_id.clone()]);
+
+                                        match jsonwebtoken::decode::<serde_json::Value>(
+                                            &ticket,
+                                            &decoding_key,
+                                            &validation,
+                                        ) {
+                                            Ok(_token_data) => {
+                                                println!("💾 [ArchitectSDK] Receiving Pushed Payload for Task {}", auction_id);
+                                                let response = self
+                                                    .provider
+                                                    .handle_solution_push(auction_id, payload)
+                                                    .await;
+                                                for msg in response {
+                                                    // CRITICAL: Relay to Orchestrator, NOT back to the worker!
+                                                    let _ = orchestrator_tx.send(msg).await;
+                                                }
+                                            }
+                                            Err(e) => {
+                                                println!("⛔ [ArchitectSDK] Push Denied: Invalid Ticket. {}", e);
+                                                let _ = tx.send(WsMessage::Text(serde_json::json!({"error": "Invalid Ticket"}).to_string())).await;
+                                            }
+                                        }
+                                    }
+                                    LoxiMessage::ClaimTask { auction_id, ticket } => {
+                                        let public_key_pem =
+                                            std::env::var("RSA_PUBLIC_KEY").unwrap_or_default();
+                                        if public_key_pem.is_empty() {
+                                            println!("⚠️ [ArchitectSDK] No RSA_PUBLIC_KEY found. Cannot verify tickets.");
+                                            let _ = tx
+                                                .send(WsMessage::Text(
+                                                    serde_json::json!({
+                                                        "error": "Architect missing Public Key"
+                                                    })
+                                                    .to_string(),
+                                                ))
+                                                .await;
+                                            continue;
+                                        }
+
+                                        let decoding_key =
+                                            match jsonwebtoken::DecodingKey::from_rsa_pem(
+                                                public_key_pem.as_bytes(),
+                                            ) {
+                                                Ok(k) => k,
+                                                Err(e) => {
+                                                    println!(
+                                                        "❌ [ArchitectSDK] Invalid Public Key: {}",
+                                                        e
+                                                    );
+                                                    continue;
+                                                }
+                                            };
+
+                                        let mut validation = jsonwebtoken::Validation::new(
+                                            jsonwebtoken::Algorithm::RS256,
+                                        );
+                                        validation.set_audience(&[auction_id.clone()]);
+
+                                        match jsonwebtoken::decode::<serde_json::Value>(
+                                            &ticket,
+                                            &decoding_key,
+                                            &validation,
+                                        ) {
+                                            Ok(_token_data) => {
+                                                println!("🔓 [ArchitectSDK] Ticket Validated for Task {}", auction_id);
+                                                // Serve Payload
+                                                if let Some(payload_str) =
+                                                    self.provider.get_payload(&auction_id).await
+                                                {
+                                                    // Send as Agnostic Payload inside PostTask (or just raw payload?)
+                                                    // Worker expects LoxiMessage usually? Or just data?
+                                                    // Let's send PostTask with payload populated, effectively "re-posting" to the worker directly.
+                                                    let response = LoxiMessage::PostTask {
+                                                        auction_id: auction_id.clone(),
+                                                        requirement: loxi_core::TaskRequirement {
+                                                            // DUMMY REQ - Worker ignores
+                                                            id: auction_id.clone(),
+                                                            affinities: vec![],
+                                                            min_ram_mb: 0,
+                                                            use_gpu: false,
+                                                            task_type: loxi_core::TaskType::Compute,
+                                                            metadata: vec![],
+                                                        },
+                                                        payload: Some(payload_str),
+                                                    };
+                                                    let _ = tx
+                                                        .send(WsMessage::Text(
+                                                            serde_json::to_string(&response)?,
+                                                        ))
+                                                        .await;
+                                                } else {
+                                                    let _ = tx.send(WsMessage::Text(serde_json::json!({"error": "Payload not found"}).to_string())).await;
+                                                }
+                                            }
+                                            Err(e) => {
+                                                println!("⛔ [ArchitectSDK] Access Denied: Invalid Ticket. {}", e);
+                                                let _ = tx.send(WsMessage::Text(serde_json::json!({"error": "Invalid Ticket"}).to_string())).await;
+                                            }
+                                        }
+                                    }
                                     LoxiMessage::DiscoverAuthority { domain_id: auction_id } => {
+                                        // Legacy / Open Discovery
                                         self.active_rooms
                                             .lock()
                                             .await
@@ -158,13 +275,21 @@ impl<P: DataProvider + 'static> DataServer<P> {
                                             let _ = orchestrator_tx.send(out_msg).await;
                                         }
                                     }
-                                    _ => {}
+                                    _ => {
+                                        println!("❔ [ArchitectSDK] Message not handled in Data Plane: {:?}", loxi_msg);
+                                    }
+                                },
+                                Err(e) => {
+                                    println!("⚠️ [ArchitectSDK] Failed to parse LoxiMessage: {}\nContent Preview: {}", e, &text[..std::cmp::min(100, text.len())]);
                                 }
                             }
                         }
                     }
                 }
-                _ => break,
+                Err(e) => {
+                    println!("❌ [ArchitectSDK] Socket Read Error: {}", e);
+                    break;
+                }
             }
         }
         Ok(())

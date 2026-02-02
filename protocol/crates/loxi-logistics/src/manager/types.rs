@@ -96,6 +96,14 @@ impl Default for Vehicle {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum TaskRole {
+    Partitioner,
+    MatrixPartition,
+    Solver,
+    Leaf, // For simple single-step tasks
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProblemConfig {
     pub partitioner_hash: Option<String>,
@@ -134,6 +142,12 @@ pub struct Problem {
     pub seed: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub solution: Option<Solution>,
+    #[serde(default = "default_role")]
+    pub role: TaskRole,
+}
+
+fn default_role() -> TaskRole {
+    TaskRole::Leaf
 }
 
 fn default_fleet_size() -> usize {
@@ -153,6 +167,7 @@ impl Problem {
             time_matrix: None,
             seed: 0,
             solution: None,
+            role: TaskRole::Leaf,
         }
     }
 
@@ -245,7 +260,7 @@ impl Default for SolutionMetadata {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Solution {
     pub route: Vec<String>,
     #[serde(default)]

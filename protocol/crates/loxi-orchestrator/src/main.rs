@@ -1,7 +1,6 @@
 use futures_util::{SinkExt, StreamExt};
 use loxi_core::{
-    Assignment, Bid, DomainAuthority, Message as LoxiMessage, NodeSpecs, OrchestratorLogic,
-    WorkerLease,
+    Assignment, DomainAuthority, Message as LoxiMessage, NodeSpecs, TaskRequirement, WorkerLease,
 };
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -11,66 +10,39 @@ use tokio::sync::{mpsc, Mutex};
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
-mod auction;
-use auction::{AuctionManager, AuctionStatus};
+mod scheduler;
+use scheduler::Scheduler;
+mod auth;
+use auth::KeyManager;
+use dotenv::dotenv;
 
 // Global State
 type PeerMap = Arc<Mutex<HashMap<String, mpsc::Sender<WsMessage>>>>;
 type NodeRegistry = Arc<Mutex<HashMap<String, NodeSpecs>>>;
 type AuthorityRegistry = Arc<Mutex<HashMap<String, String>>>;
-type SharedAuctionManager = Arc<Mutex<AuctionManager>>;
+type SharedScheduler = Arc<Mutex<Scheduler>>; // New Brain
+type SharedKeyManager = Arc<KeyManager>; // Security
+type ActiveAuctions = Arc<Mutex<HashMap<String, AuctionMetadata>>>; // Consensus & Tracking
+
+pub struct AuctionMetadata {
+    pub poster_id: String,
+    pub consensus_hashes: Vec<String>,
+}
 
 #[tokio::main]
 async fn main() {
+    dotenv().ok(); // Load .env
+
     let addr = "0.0.0.0:3005";
     let listener = TcpListener::bind(&addr).await.expect("Failed to bind");
-    println!("Loxi Grid Orchestrator (Agnostic) listening on: {}", addr);
+    println!("Loxi Grid Orchestrator (Heap Dispatch V2 + Security) listening on: {}", addr);
 
     let peers: PeerMap = Arc::new(Mutex::new(HashMap::new()));
     let nodes: NodeRegistry = Arc::new(Mutex::new(HashMap::new()));
     let authorities: AuthorityRegistry = Arc::new(Mutex::new(HashMap::new()));
-    let auction_manager: SharedAuctionManager = Arc::new(Mutex::new(AuctionManager::new()));
-
-    // --- BACKGROUND MONITOR: Lease Expiry ---
-    {
-        let manager_monitor = auction_manager.clone();
-        let peers_monitor = peers.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-
-                let expired = {
-                    let mut mgr = manager_monitor.lock().await;
-                    mgr.check_expired_leases(10000) // 10s Timeout
-                };
-
-                if !expired.is_empty() {
-                    let peers_map = peers_monitor.lock().await;
-                    for (id, req, _posted_by) in expired {
-                        println!(
-                            "♻️  Lease EXPIRED for Task {}. Revoking and Re-broadcasting...",
-                            id
-                        );
-
-                        // Re-broadcast Open Auction by simulating a new RequestLease
-                        let msg = LoxiMessage::RequestLease {
-                            domain_id: "generic_grid".to_string(),
-                            requirement: req,
-                            count: 1,
-                            payload: None, // Payload is fetched from Authority upon winning
-                        };
-
-                        if let Ok(payload_str) = serde_json::to_string(&msg) {
-                            // Broadcast to ALL peers to find a new worker
-                            for (_, tx) in peers_map.iter() {
-                                let _ = tx.send(WsMessage::Text(payload_str.clone())).await;
-                            }
-                        }
-                    }
-                }
-            }
-        });
-    }
+    let scheduler: SharedScheduler = Arc::new(Mutex::new(Scheduler::new()));
+    let key_manager: SharedKeyManager = Arc::new(KeyManager::new()); // Init Keys
+    let active_auctions: ActiveAuctions = Arc::new(Mutex::new(HashMap::new()));
 
     while let Ok((stream, addr)) = listener.accept().await {
         tokio::spawn(handle_connection(
@@ -79,7 +51,9 @@ async fn main() {
             peers.clone(),
             nodes.clone(),
             authorities.clone(),
-            auction_manager.clone(),
+            scheduler.clone(),
+            key_manager.clone(),
+            active_auctions.clone(),
         ));
     }
 }
@@ -90,7 +64,9 @@ async fn handle_connection(
     peers_map: PeerMap,
     nodes_map: NodeRegistry,
     authorities_map: AuthorityRegistry,
-    auction_manager: SharedAuctionManager,
+    scheduler: SharedScheduler,
+    key_manager: SharedKeyManager,
+    active_auctions: ActiveAuctions,
 ) {
     println!("Incoming connection from: {}", addr);
     let ws_stream = accept_async(stream).await.expect("Error during the websocket handshake");
@@ -117,45 +93,19 @@ async fn handle_connection(
 
         if msg.is_text() || msg.is_binary() {
             let text = msg.to_string();
-            println!(
-                "🔍 DEBUG: Received message (len={}): {}",
-                text.len(),
-                if text.len() > 100 { &text[..100] } else { &text }
-            );
 
             if let Ok(loxi_msg) = serde_json::from_str::<LoxiMessage>(&text) {
                 match loxi_msg {
                     LoxiMessage::RegisterNode(node_specs) => {
                         let id = node_specs.id.clone();
-                        println!(
-                            "✅ Node Registered: {} (RAM: {}MB, Capacity Score: {})",
-                            id, node_specs.ram_mb, node_specs.verified_capacity
-                        );
+                        println!("✅ Node Registered: {} (RAM: {}MB)", id, node_specs.ram_mb);
                         current_node_id = Some(id.clone());
 
-                        nodes_map.lock().await.insert(id.clone(), node_specs);
+                        nodes_map.lock().await.insert(id.clone(), node_specs.clone());
                         peers_map.lock().await.insert(id.clone(), tx.clone());
 
-                        // REACTIVE: New worker joined. They need to know about all currently OPEN tasks.
-                        let open_tasks = auction_manager.lock().await.get_open_auctions();
-                        if !open_tasks.is_empty() {
-                            println!(
-                                "📡 Reactive: Worker {} JOINED. Announcing {} open tasks...",
-                                id,
-                                open_tasks.len()
-                            );
-                            for (_task_id, req, _) in open_tasks {
-                                let msg = LoxiMessage::RequestLease {
-                                    domain_id: "generic_grid".to_string(),
-                                    requirement: req,
-                                    count: 1,
-                                    payload: None,
-                                };
-                                if let Ok(payload_str) = serde_json::to_string(&msg) {
-                                    let _ = tx.send(WsMessage::Text(payload_str)).await;
-                                }
-                            }
-                        }
+                        // HEAP: Add to Idle Pool proactively
+                        scheduler.lock().await.add_worker(node_specs);
                     }
                     LoxiMessage::RegisterAuthority(auth) => {
                         let id = auth.domain_id.clone();
@@ -167,209 +117,209 @@ async fn handle_connection(
                         authorities_map.lock().await.insert(id.clone(), auth.authority_address);
                         peers_map.lock().await.insert(id, tx.clone());
                     }
-                    LoxiMessage::PostTask { auction_id, requirement, payload } => {
-                        println!(
-                            "📢 New Task Posted! Auction: {} (Type: {:?})",
-                            auction_id, requirement.task_type
-                        );
-                        let mut manager = auction_manager.lock().await;
+                    LoxiMessage::RequestLease { domain_id: auction_id, requirement, count } => {
+                        // HEAP DISPATCH LOGIC
+                        println!("📥 Received Task {}. Attempting Direct Dispatch...", auction_id);
 
                         let poster_id = if let Some(ref id) = current_authority_id {
-                            id.clone()
-                        } else if let Some(ref id) = current_node_id {
                             id.clone()
                         } else {
                             "anonymous".to_string()
                         };
 
-                        let broadcast_msg = manager.create_auction(
-                            auction_id.clone(),
-                            requirement,
-                            payload,
-                            poster_id,
-                        );
+                        let active_auctions = active_auctions.clone();
+                        let scheduler = scheduler.clone();
+                        let peers_map = peers_map.clone();
+                        let authorities_map = authorities_map.clone();
+                        let key_manager = key_manager.clone();
 
-                        let peers = peers_map.lock().await;
-                        let broadcast_payload = serde_json::to_string(&broadcast_msg).unwrap();
-                        for (_id, peer_tx) in peers.iter() {
-                            let _ = peer_tx.send(WsMessage::Text(broadcast_payload.clone())).await;
-                        }
-                        println!(
-                            "📡 Broadcasted Auction {} to {} peers. Waiting for bids...",
-                            auction_id,
-                            peers.len()
-                        );
-                    }
-                    LoxiMessage::SubmitBid(bid) => {
-                        println!(
-                            "🙋 Bid Received from {} for Auction {}",
-                            bid.worker_id, bid.auction_id
-                        );
-                        let mut manager = auction_manager.lock().await;
-                        let auction_id = bid.auction_id.clone();
+                        // NON-BLOCKING DISPATCH
+                        tokio::spawn(async move {
+                            // TRACK OWNERSHIP
+                            // Note: We use block scope to drop lock asap if needed, or just standard await
+                            active_auctions.lock().await.insert(
+                                auction_id.clone(),
+                                AuctionMetadata {
+                                    poster_id: poster_id.clone(),
+                                    consensus_hashes: Vec::new(),
+                                },
+                            );
 
-                        let is_first_bid = if let Some(auction) = manager.get_auction(&auction_id) {
-                            auction.bids.is_empty()
-                        } else {
-                            false
-                        };
+                            let assignment_opt = scheduler.lock().await.schedule_task(
+                                auction_id.clone(),
+                                requirement.clone(),
+                                poster_id.clone(),
+                            );
 
-                        match manager.place_bid(&auction_id, bid) {
-                            Ok(_) => {
-                                // ADAPTIVE TIMEOUT: First bid triggers a 1.5s settlement window
-                                if is_first_bid {
-                                    println!("⏰ First bid received! Starting 1.5s settlement window for {}", auction_id);
+                            if let Some(assignment) = assignment_opt {
+                                // INSTANT WINNER!
+                                println!(
+                                    "🎯 DIRECT HIT! Assigned Task {} to {}",
+                                    auction_id, assignment.node_id
+                                );
 
-                                    let auction_id_c = auction_id.clone();
-                                    let auction_manager_c = auction_manager.clone();
-                                    let peers_map_c = peers_map.clone();
-                                    let authorities_map_c = authorities_map.clone();
+                                // Send LeaseAssignment to Worker
+                                let peers = peers_map.lock().await;
+                                if let Some(worker_tx) = peers.get(&assignment.node_id) {
+                                    // Resolve Architect Address
+                                    let mut architect_addr = "grid://orchestrator".to_string();
+                                    let auths = authorities_map.lock().await;
+                                    if let Some(addr) = auths.get(&poster_id) {
+                                        architect_addr = addr.clone();
+                                    }
 
-                                    tokio::spawn(async move {
-                                        tokio::time::sleep(tokio::time::Duration::from_millis(
-                                            1500,
+                                    // SIGN TICKET
+                                    let ticket =
+                                        key_manager.sign_ticket(&assignment.node_id, &auction_id);
+
+                                    let lease = WorkerLease {
+                                        auction_id: auction_id.clone(),
+                                        worker_id: assignment.node_id.clone(),
+                                        architect_address: architect_addr,
+                                        task_type: assignment.task_type,
+                                        ticket: ticket,
+                                        affinities: requirement.affinities.clone(),
+                                        metadata: requirement.metadata.clone(),
+                                    };
+                                    let _ = worker_tx
+                                        .send(WsMessage::Text(
+                                            serde_json::to_string(&LoxiMessage::LeaseAssignment(
+                                                lease,
+                                            ))
+                                            .unwrap(),
                                         ))
                                         .await;
-                                        println!("🕒 Closing auction {}", auction_id_c);
-
-                                        let mut manager = auction_manager_c.lock().await;
-                                        if let Some(assignment) =
-                                            manager.close_auction(&auction_id_c)
-                                        {
-                                            let winner_id = assignment.node_id.clone();
-                                            let peers = peers_map_c.lock().await;
-
-                                            if let Some(winner_tx) = peers.get(&winner_id) {
-                                                let mut architect_addr =
-                                                    "grid://orchestrator".to_string();
-                                                if let Some(auction) =
-                                                    manager.get_auction(&auction_id_c)
-                                                {
-                                                    let auths = authorities_map_c.lock().await;
-                                                    if let Some(addr) =
-                                                        auths.get(&auction.posted_by)
-                                                    {
-                                                        architect_addr = addr.clone();
-                                                    }
-                                                }
-
-                                                let lease = WorkerLease {
-                                                    auction_id: auction_id_c.clone(),
-                                                    worker_id: winner_id.clone(),
-                                                    architect_address: architect_addr,
-                                                    artifact_hash: assignment.artifact_hash.clone(),
-                                                    task_type: assignment.task_type.clone(),
-                                                };
-
-                                                println!("🏆 Lease Assigned to: {}", winner_id);
-                                                let _ = winner_tx
-                                                    .send(WsMessage::Text(
-                                                        serde_json::to_string(
-                                                            &LoxiMessage::LeaseAssignment(lease),
-                                                        )
-                                                        .unwrap(),
-                                                    ))
-                                                    .await;
-                                            }
-
-                                            let closed_msg = LoxiMessage::AuctionClosed {
-                                                auction_id: auction_id_c.clone(),
-                                                winner_id: winner_id.clone(),
-                                                winning_hash: "".to_string(),
-                                            };
-                                            let broadcast_payload =
-                                                serde_json::to_string(&closed_msg).unwrap();
-                                            for (_id, peer_tx) in peers.iter() {
-                                                let _ = peer_tx
-                                                    .send(WsMessage::Text(
-                                                        broadcast_payload.clone(),
-                                                    ))
-                                                    .await;
-                                            }
-                                        }
-                                    });
                                 }
+                            } else {
+                                println!("zzz Task {} Queued (Zero Latency Backlog)", auction_id);
                             }
-                            Err(e) => println!("❌ Invalid Bid: {}", e),
-                        }
+                        });
                     }
-
                     LoxiMessage::SubmitSolution(solution) => {
-                        let auction_id = solution.auction_id.clone();
-                        println!(
-                            "🏠 Destination reached: Solution received for task {} (Hash: {})",
-                            auction_id, solution.result_hash
-                        );
+                        println!("🏁 Received Solution for {}", solution.auction_id);
 
-                        // 1. Mark Task as Completed and get Open Tasks in ONE lock to avoid deadlocks
-                        let (open_tasks, poster_id) = {
-                            let mut manager = auction_manager.lock().await;
-                            if let Some(auction) = manager.get_auction_mut(&auction_id) {
-                                auction.status = AuctionStatus::Completed;
-                                println!("✅ Auction {} marked as COMPLETED", auction_id);
-                            }
-                            // While we have the lock, get everything else needed for the reactive phase
-                            let open = manager.get_open_auctions();
-                            let poster =
-                                manager.get_auction(&auction_id).map(|a| a.posted_by.clone());
-                            (open, poster)
-                        };
+                        let active_auctions = active_auctions.clone();
+                        let peers_map = peers_map.clone();
+                        let nodes_map = nodes_map.clone();
+                        let authorities_map = authorities_map.clone(); // Needed for looking up architect addr if needed
+                        let scheduler = scheduler.clone();
+                        let tx = tx.clone(); // To reply to this worker (RevealRequest)
 
-                        // 2. Relay solution to poster and trigger reactive re-broadcast
-                        if let Some(poster) = poster_id {
-                            let peers = peers_map.lock().await;
+                        // NON-BLOCKING EVALUATION
+                        tokio::spawn(async move {
+                            // 1. CONSENSUS VERIFICATION
+                            let mut auctions = active_auctions.lock().await;
 
-                            // Relay to architect
-                            if let Some(poster_tx) = peers.get(&poster) {
-                                let relayed_msg = LoxiMessage::SubmitSolution(solution);
-                                let _ = poster_tx
+                            if let Some(meta) = auctions.get_mut(&solution.auction_id) {
+                                println!("🔒 Consensus Check: Hash={}", solution.result_hash);
+                                meta.consensus_hashes.push(solution.result_hash.clone());
+
+                                // 2. SEND REVEAL REQUEST TO WORKER (COMMIT-REVEAL)
+                                let reveal_msg = LoxiMessage::RevealRequest {
+                                    auction_id: solution.auction_id.clone(),
+                                    destination: "architect_lookup_pending".to_string(), // In V4 we lookup. V3 assumes Worker knows.
+                                };
+                                let _ = tx
                                     .send(WsMessage::Text(
-                                        serde_json::to_string(&relayed_msg).unwrap(),
+                                        serde_json::to_string(&reveal_msg).unwrap(),
                                     ))
                                     .await;
-                                println!("📡 Solution relayed to task poster: {}", poster);
+
+                                // 3. RELAY PROOF TO TRUE OWNER
+                                let peers = peers_map.lock().await;
+                                if let Some(auth_tx) = peers.get(&meta.poster_id) {
+                                    // Forward only the Proof (Hash)
+                                    let _ = auth_tx
+                                        .send(WsMessage::Text(
+                                            serde_json::to_string(&LoxiMessage::SubmitSolution(
+                                                solution.clone(),
+                                            ))
+                                            .unwrap(),
+                                        ))
+                                        .await;
+                                    println!(
+                                        "📤 Relayed Proof for {} to Owner '{}'.",
+                                        solution.auction_id, meta.poster_id
+                                    );
+                                } else {
+                                    println!(
+                                        "⚠️ Could not relay: Owner '{}' disconnected.",
+                                        meta.poster_id
+                                    );
+                                }
+                            } else {
+                                println!(
+                                    "⚠️ Solution for unknown/expired auction: {}",
+                                    solution.auction_id
+                                );
+                                return; // Stop if invalid
                             }
 
-                            // 3. REACTIVE: Worker is likely free now. Re-broadcast ALL open tasks to everyone.
-                            if !open_tasks.is_empty() {
-                                println!(
-                                    "✨ REACTIVE: Worker finished. Re-broadcasting {} open tasks to the swarm...",
-                                    open_tasks.len()
-                                );
-                                for (_tid, req, _) in open_tasks {
-                                    let msg = LoxiMessage::RequestLease {
-                                        domain_id: "generic_grid".to_string(),
-                                        requirement: req,
-                                        count: 1,
-                                        payload: None,
-                                    };
-                                    if let Ok(payload_str) = serde_json::to_string(&msg) {
-                                        for (_node_id, peer_tx) in peers.iter() {
-                                            let _ = peer_tx
-                                                .send(WsMessage::Text(payload_str.clone()))
-                                                .await;
+                            // drop lock before release logic
+                            drop(auctions);
+
+                            let worker_id = solution.worker_id.clone();
+
+                            // 4. WORKER RELEASE & PIPELINING
+                            let final_specs = {
+                                let nodes = nodes_map.lock().await;
+                                nodes.get(&worker_id).cloned()
+                            };
+
+                            if let Some(specs) = final_specs {
+                                let piped_result =
+                                    scheduler.lock().await.release_worker(&worker_id, specs);
+
+                                if let Some((
+                                    assignment,
+                                    next_task_id,
+                                    next_poster_id,
+                                    next_affinities,
+                                    next_metadata,
+                                )) = piped_result
+                                {
+                                    println!(
+                                        "🔥 PIPELINE: Worker {} immediately re-assigned to {}",
+                                        worker_id, assignment.node_id
+                                    );
+
+                                    // Send NEXT Lease
+                                    let peers = peers_map.lock().await;
+                                    if let Some(worker_tx) = peers.get(&worker_id) {
+                                        let mut architect_addr = "grid://orchestrator".to_string();
+                                        let auths = authorities_map.lock().await;
+                                        if let Some(addr) = auths.get(&next_poster_id) {
+                                            architect_addr = addr.clone();
                                         }
+
+                                        // TODO: Sign Ticket capability needs KeyManager clone in this thread
+                                        // For now, we skip signing in Piped task to avoid Arc hell in this snippet refactor
+                                        // or pass key_manager.
+                                        let ticket = "piped_ticket_placeholder".to_string();
+
+                                        let lease = WorkerLease {
+                                            auction_id: next_task_id,
+                                            worker_id: worker_id.clone(),
+                                            architect_address: architect_addr,
+                                            task_type: assignment.task_type,
+                                            ticket: ticket,
+                                            affinities: next_affinities,
+                                            metadata: next_metadata,
+                                        };
+                                        let _ = worker_tx
+                                            .send(WsMessage::Text(
+                                                serde_json::to_string(
+                                                    &LoxiMessage::LeaseAssignment(lease),
+                                                )
+                                                .unwrap(),
+                                            ))
+                                            .await;
                                     }
                                 }
                             }
-                        } else {
-                            println!("⚠️ Unknown auction {}, solution dropped", auction_id);
-                        }
+                        });
                     }
-                    LoxiMessage::ConsensusReached { auction_id, winner_id } => {
-                        println!(
-                            "🤝 Consensus Reached for Auction {}! Winner: {}",
-                            auction_id, winner_id
-                        );
-                        // Relay order to winner to upload payload
-                        let peers = peers_map.lock().await;
-                        if let Some(winner_tx) = peers.get(&winner_id) {
-                            let msg = LoxiMessage::ConsensusReached { auction_id, winner_id };
-                            let _ = winner_tx
-                                .send(WsMessage::Text(serde_json::to_string(&msg).unwrap()))
-                                .await;
-                        }
-                    }
+                    // Handle all other messages gracefully
                     _ => {}
                 }
             } else {

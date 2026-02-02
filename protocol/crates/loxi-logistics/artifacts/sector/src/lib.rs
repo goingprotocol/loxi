@@ -94,6 +94,7 @@ impl LoxiArtifact for SectorArtifact {
                     time_matrix: None,
                     seed: problem.seed,
                     solution: None,
+                    role: loxi_logistics::manager::types::TaskRole::Leaf,
                 };
 
                 // Attach sliced matrices

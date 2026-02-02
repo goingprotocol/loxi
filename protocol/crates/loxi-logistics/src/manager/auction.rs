@@ -30,12 +30,7 @@ impl AuctionManager {
     }
 
     /// Create a new auction for a specific task requirement
-    pub fn create_auction(
-        &mut self,
-        auction_id: String,
-        req: TaskRequirement,
-        payload: Option<String>,
-    ) -> LoxiMessage {
+    pub fn create_auction(&mut self, auction_id: String, req: TaskRequirement) -> LoxiMessage {
         let auction = Auction {
             id: auction_id.clone(),
             status: AuctionStatus::Open,
@@ -48,7 +43,7 @@ impl AuctionManager {
 
         // In L2, this would be an Event emission.
         // In Server Mode, this returns a message to be broadcasted via WebSocket.
-        LoxiMessage::PostTask { auction_id: auction_id.clone(), requirement: req, payload }
+        LoxiMessage::RequestLease { domain_id: auction_id.clone(), requirement: req, count: 1 }
     }
 
     /// Register a bid from a worker

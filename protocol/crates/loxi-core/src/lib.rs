@@ -9,10 +9,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum TaskType {
-    Compute,        // General purpose CPU task
-    Storage,        // Data-heavy / I/O task
-    Batch,          // Specialized Batch/Group task (Formerly Matrix)
-    Custom(String), // Domain-specific custom task types
+    Compute,        // General purpose CPU/GPU task
+    Proxy,          // Networking / Gateway task
+    Custom(String), // Domain-specific custom labels
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,23 +28,17 @@ pub struct NodeSpecs {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRequirement {
     pub id: String,
-    pub artifact_hash: String,       // WASM Artifact identifier (SHA-256)
-    pub context_hashes: Vec<String>, // Required data contexts
+    pub affinities: Vec<String>, // Generic capability/data identifiers (e.g. "loxi_vrp_v1", "h3_cell_x")
     pub min_ram_mb: u64,
     pub use_gpu: bool,
     pub task_type: TaskType,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mission_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub workflow_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub state: Option<String>,
+    #[serde(default)]
+    pub metadata: Vec<(String, String)>, // Opaque domain metadata for the Architect
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Assignment {
     pub node_id: String,
-    pub artifact_hash: String,
     pub task_type: TaskType,
 }
 
@@ -54,8 +47,12 @@ pub struct WorkerLease {
     pub auction_id: String,
     pub worker_id: String,
     pub architect_address: String,
-    pub artifact_hash: String,
     pub task_type: TaskType,
+    pub ticket: String, // Mandatory Access Token
+    #[serde(default)]
+    pub affinities: Vec<String>,
+    #[serde(default)]
+    pub metadata: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,19 +66,9 @@ pub struct Solution {
     pub auction_id: String,
     pub worker_id: String,
     pub result_hash: String,
-    pub cost: f64,
-    pub content_type: String,
     pub payload: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_action: Option<String>,
-
-    // FUTURE: Consensus Validation & Slashing
-    // When enabled, multiple workers solve with different seeds
-    // and the Orchestrator validates hash consistency
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub consensus_group: Option<String>, // Group ID for multi-seed validation
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub seed: Option<u64>, // Seed used for this specific solution
+    #[serde(default)]
+    pub metadata: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,13 +89,18 @@ pub enum Message {
     },
     AuthorityFound(DomainAuthority),
 
+    // Auth-based Data Fetch
+    ClaimTask {
+        auction_id: String,
+        ticket: String,
+    },
+
     // Phase 2: Worker Renting (The Grid)
     // Architect -> Orchestrator
     RequestLease {
         domain_id: String,
         requirement: TaskRequirement,
         count: u32,
-        payload: Option<String>,
     },
     // Orchestrator -> SDK
     LeaseAssignment(WorkerLease),
@@ -130,6 +122,12 @@ pub enum Message {
         payload: String,
         progress: f32,
     },
+    // SDK -> Architect (Direct Data Plane)
+    PushSolution {
+        auction_id: String,
+        ticket: String,
+        payload: String,
+    },
 
     // Orchestrator -> Grid: Notifica quién ganó basado en el mejor costo/hash
     AuctionClosed {
@@ -139,9 +137,9 @@ pub enum Message {
     },
 
     // Orquestador -> Ganador: Orden de subir la data pesada al Architect
-    ConsensusReached {
+    RevealRequest {
         auction_id: String,
-        winner_id: String,
+        destination: String,
     },
 
     // Mission Lifecycle Management
@@ -174,11 +172,11 @@ impl OrchestratorLogic {
                 continue;
             }
 
-            // 2. Data Affinity Scoring (The "Expertise" multiplier)
+            // 2. Data Affinity Scoring (Generic Capability boost)
             let mut affinity_score: u64 = 0;
-            for req_hash in &req.context_hashes {
-                if node.affinity_hashes.contains(req_hash) {
-                    affinity_score += 5000; // Major boost for having the data locally
+            for req_affinity in &req.affinities {
+                if node.affinity_hashes.contains(req_affinity) {
+                    affinity_score += 5000; // Major boost for matching affinity (cached data/software)
                 }
             }
 
@@ -194,7 +192,19 @@ impl OrchestratorLogic {
             // 4. Granular Scoring (Tie-breaker)
             let hardware_score = node.ram_mb / 1024 + (node.thread_count as u64 * 10);
 
-            let total_score = tier_score + hardware_score + affinity_score;
+            // 5. Load Balancing (Pseudo-Random Variance)
+            // Use simple hashing of (NodeID + TaskID) to distribute load among identical nodes.
+            // This avoids the "First Node Wins All" problem in homogenous clusters.
+            let mut hash = 5381u64;
+            for c in node.id.bytes() {
+                hash = ((hash << 5).wrapping_add(hash)).wrapping_add(c as u64);
+            }
+            for c in req.id.bytes() {
+                hash = ((hash << 5).wrapping_add(hash)).wrapping_add(c as u64);
+            }
+            let variance = hash % 50; // 0-49 points variation
+
+            let total_score = tier_score + hardware_score + affinity_score + variance;
 
             if total_score > best_score {
                 best_score = total_score;
@@ -202,11 +212,8 @@ impl OrchestratorLogic {
             }
         }
 
-        best_node.map(|node| Assignment {
-            node_id: node.id.clone(),
-            artifact_hash: req.artifact_hash.clone(),
-            task_type: req.task_type.clone(),
-        })
+        best_node
+            .map(|node| Assignment { node_id: node.id.clone(), task_type: req.task_type.clone() })
     }
 }
 
@@ -240,20 +247,16 @@ mod tests {
 
         let req = TaskRequirement {
             id: "task_1".to_string(),
-            artifact_hash: "artifact_hash_123".to_string(),
-            context_hashes: vec![],
+            affinities: vec!["capability_x".to_string()],
             min_ram_mb: 4000,
             use_gpu: true,
             task_type: TaskType::Compute,
-            mission_id: None,
-            workflow_id: None,
-            state: None,
+            metadata: Vec::new(),
         };
 
         // Should pick gaming_pc
         let assignment = OrchestratorLogic::select_best_node(&nodes, &req).unwrap();
         assert_eq!(assignment.node_id, "gaming_pc");
-        assert_eq!(assignment.artifact_hash, "artifact_hash_123");
     }
 
     #[test]
@@ -265,7 +268,7 @@ mod tests {
                 vram_mb: 0,
                 thread_count: 8,
                 is_webgpu_enabled: false,
-                affinity_hashes: vec!["target_data".to_string()],
+                affinity_hashes: vec!["dataset_alpha".to_string()],
                 verified_capacity: 500,
             },
             NodeSpecs {
@@ -281,14 +284,11 @@ mod tests {
 
         let req = TaskRequirement {
             id: "task_2".to_string(),
-            artifact_hash: "solve_wasm".to_string(),
-            context_hashes: vec!["target_data".to_string()],
+            affinities: vec!["module_gamma".to_string(), "dataset_alpha".to_string()],
             min_ram_mb: 2000,
             use_gpu: false,
             task_type: TaskType::Compute,
-            mission_id: None,
-            workflow_id: None,
-            state: None,
+            metadata: Vec::new(),
         };
 
         // Even though PC is more powerful, the phone has the data affinity!
@@ -299,12 +299,12 @@ mod tests {
     #[test]
     fn test_task_type_serialization() {
         let compute = TaskType::Compute;
-        let custom = TaskType::Custom("partitioner".to_string());
+        let custom = TaskType::Custom("generic_module".to_string());
 
         let s_compute = serde_json::to_string(&compute).unwrap();
         let s_custom = serde_json::to_string(&custom).unwrap();
 
         assert_eq!(s_compute, "\"Compute\"");
-        assert_eq!(s_custom, "{\"Custom\":\"partitioner\"}");
+        assert_eq!(s_custom, "{\"Custom\":\"generic_module\"}");
     }
 }

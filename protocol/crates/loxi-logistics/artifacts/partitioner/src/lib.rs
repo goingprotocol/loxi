@@ -42,6 +42,7 @@ impl LoxiArtifact for PartitionerArtifact {
                     time_matrix: None,
                     seed: problem.seed,
                     solution: None,
+                    role: loxi_logistics::manager::types::TaskRole::Leaf, // Default to leaf until architect reassigned
                 });
             }
         }
