@@ -1,7 +1,5 @@
 use futures_util::{SinkExt, StreamExt};
-use loxi_core::{
-    Assignment, DomainAuthority, Message as LoxiMessage, NodeSpecs, TaskRequirement, WorkerLease,
-};
+use loxi_core::{Message as LoxiMessage, NodeSpecs, WorkerLease};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -117,7 +115,11 @@ async fn handle_connection(
                         authorities_map.lock().await.insert(id.clone(), auth.authority_address);
                         peers_map.lock().await.insert(id, tx.clone());
                     }
-                    LoxiMessage::RequestLease { domain_id: auction_id, requirement, count } => {
+                    LoxiMessage::RequestLease {
+                        domain_id: auction_id,
+                        requirement,
+                        count: _count,
+                    } => {
                         // HEAP DISPATCH LOGIC
                         println!("📥 Received Task {}. Attempting Direct Dispatch...", auction_id);
 
@@ -204,6 +206,7 @@ async fn handle_connection(
                         let authorities_map = authorities_map.clone(); // Needed for looking up architect addr if needed
                         let scheduler = scheduler.clone();
                         let tx = tx.clone(); // To reply to this worker (RevealRequest)
+                        let key_manager = key_manager.clone();
 
                         // NON-BLOCKING EVALUATION
                         tokio::spawn(async move {
@@ -292,10 +295,8 @@ async fn handle_connection(
                                             architect_addr = addr.clone();
                                         }
 
-                                        // TODO: Sign Ticket capability needs KeyManager clone in this thread
-                                        // For now, we skip signing in Piped task to avoid Arc hell in this snippet refactor
-                                        // or pass key_manager.
-                                        let ticket = "piped_ticket_placeholder".to_string();
+                                        let ticket =
+                                            key_manager.sign_ticket(&worker_id, &next_task_id);
 
                                         let lease = WorkerLease {
                                             auction_id: next_task_id,

@@ -1,42 +1,42 @@
 # Rust
 target/
+**/target/
 **/*.rs.bk
 *.pdb
-# Cargo.lock is typically committed for applications/CLIs to ensure reproducible builds.
 
-# WASM
-/crates/loxi-wasm/pkg/
+# WASM / Pack
+**/pkg/
 /wasm-pack.log
 
-# IDE
+# IDE / OS
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
-*.gph
-
-# OS
 .DS_Store
 Thumbs.db
 
-# Build artifacts
-/dist/
-/build/
-
-# Valhalla Data
-scripts/valhalla_data/
+# Build & Data
+**/dist/
+**/build/
+*.gph
 *.osm.pbf
+scripts/valhalla_data/
+protocol/crates/loxi-logistics/.loxi_data.json
 
-# Loxi Protocol Artifacts
-protocol/apps/worker-web/public/artifacts/
+# LOGISTICS BLOAT (Valhalla build libs & served artifacts)
+protocol/crates/loxi-logistics/libs/
+protocol/crates/loxi-logistics/artifacts/
+protocol/crates/loxi-logistics/valhalla_tiles/
 
-# Test / bench outputs (local convenience)
-/bench-output.txt
-/test-output.txt
-/benchmark-results/
+# Dependencies
+node_modules/
+**/node_modules/
 
-node_modules
-
-# AI Chat Logs
+# AI & Logs
 chatai/
+*.log
+bench-output.txt
+test-output.txt
+benchmark-results/

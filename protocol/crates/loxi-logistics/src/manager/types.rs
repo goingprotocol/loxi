@@ -110,16 +110,22 @@ pub struct ProblemConfig {
     pub matrix_artifact_hash: Option<String>,
     pub solver_artifact_hash: Option<String>,
     pub workflow_id: Option<String>,
+    #[serde(default)] // Allow omit for backward compat
+    pub priority_owner: Option<String>,
+    #[serde(default)]
+    pub min_cpu: Option<u32>,
     pub required_contexts: Vec<String>,
 }
 
 impl Default for ProblemConfig {
     fn default() -> Self {
         Self {
-            partitioner_hash: None,
+            partitioner_hash: Some("loxi_partitioner_v1".to_string()),
             matrix_artifact_hash: Some("loxi_valhalla_v1".to_string()),
-            solver_artifact_hash: Some("loxi_vrp_artifact_v1".to_string()),
+            solver_artifact_hash: Some("loxi_solver_v1".to_string()),
             workflow_id: Some("standard_vrp_flow".to_string()),
+            priority_owner: None,
+            min_cpu: None,
             required_contexts: vec![],
         }
     }
@@ -262,9 +268,11 @@ impl Default for SolutionMetadata {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Solution {
+    #[serde(default)]
     pub route: Vec<String>,
     #[serde(default)]
     pub unassigned_jobs: Vec<String>,
+    #[serde(default)]
     pub cost: f64,
     #[serde(default)]
     pub cost_breakdown: CostBreakdown,
@@ -272,6 +280,8 @@ pub struct Solution {
     pub violations: Vec<Violation>,
     #[serde(default)]
     pub metadata: SolutionMetadata,
+    #[serde(default)]
+    pub matrix: Option<serde_json::Value>,
 }
 
 impl Solution {
@@ -283,6 +293,7 @@ impl Solution {
             cost_breakdown: CostBreakdown::default(),
             violations: Vec::new(),
             metadata,
+            matrix: None,
         }
     }
 

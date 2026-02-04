@@ -70,7 +70,8 @@ async fn main() {
         let cors = warp::cors()
             .allow_any_origin()
             .allow_methods(vec!["GET", "POST", "OPTIONS"])
-            .allow_headers(vec!["Content-Type"]);
+            .allow_headers(vec!["Content-Type", "Range", "User-Agent", "Accept"])
+            .expose_headers(vec!["Content-Length", "Content-Range", "Accept-Ranges"]);
 
         let manager_for_submit = manager_for_http.clone();
         let tx_for_submit = tx_clone.clone();
@@ -138,6 +139,10 @@ async fn main() {
                                                 serde_json::Value::String(m_id.clone()),
                                             );
                                         }
+                                        // NEW: Inject STOPS so UI can draw the route
+                                        if let Ok(stops_val) = serde_json::to_value(&p.stops) {
+                                            obj.insert("stops".to_string(), stops_val);
+                                        }
                                     }
                                     (id.clone(), val)
                                 })
@@ -167,8 +172,9 @@ async fn main() {
                 }
             });
 
-        let routes = submit_problem.or(get_solution).with(cors);
+        let artifacts = warp::path("artifacts").and(warp::fs::dir("./artifacts"));
 
+        let routes = submit_problem.or(get_solution).or(artifacts).with(cors);
         println!("🌐 HTTP Server listening on: http://0.0.0.0:3007");
         warp::serve(routes).run(([0, 0, 0, 0], 3007)).await;
     });
@@ -188,8 +194,6 @@ async fn main() {
                                     let mut mg = manager_arc.lock().await;
 
                                     // The Conductor handles:
-                                    // - PostTask (Adopts problems from web/others)
-                                    // - SubmitSolution (Triggers next stages: Matrix -> Solve)
                                     // - PostTask (Adopts problems from web/others)
                                     // - SubmitSolution (Triggers next stages: Matrix -> Solve)
                                     mg.handle_incoming_message(loxi_msg)

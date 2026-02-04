@@ -22,7 +22,7 @@ pub trait LoxiArtifact {
     fn get_cost(solution: &Self::Solution) -> f64;
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ArtifactResponse {
     pub payload: String,
     pub hash: String,

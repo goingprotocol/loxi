@@ -131,8 +131,8 @@ impl<P: DataProvider + 'static> DataServer<P> {
                                                 }
                                             }
                                             Err(e) => {
-                                                println!("⛔ [ArchitectSDK] Push Denied: Invalid Ticket. {}", e);
-                                                let _ = tx.send(WsMessage::Text(serde_json::json!({"error": "Invalid Ticket"}).to_string())).await;
+                                                println!("⛔ [ArchitectSDK] Access Denied for Task {}: Invalid Ticket. Error: {:?}", auction_id, e);
+                                                let _ = tx.send(WsMessage::Text(serde_json::json!({"error": format!("Invalid Ticket: {:?}", e)}).to_string())).await;
                                             }
                                         }
                                     }
@@ -182,21 +182,28 @@ impl<P: DataProvider + 'static> DataServer<P> {
                                                 if let Some(payload_str) =
                                                     self.provider.get_payload(&auction_id).await
                                                 {
-                                                    // Send as Agnostic Payload inside PostTask (or just raw payload?)
-                                                    // Worker expects LoxiMessage usually? Or just data?
-                                                    // Let's send PostTask with payload populated, effectively "re-posting" to the worker directly.
+                                                    // Wrap in loxi_types::Problem for agnostic transport
+                                                    let agnostic = loxi_types::Problem {
+                                                        auction_id: auction_id.clone(),
+                                                        domain_id: self.domain_id.clone(),
+                                                        payload: Some(payload_str),
+                                                    };
+                                                    let wrapped_payload =
+                                                        serde_json::to_string(&agnostic)?;
+
                                                     let response = LoxiMessage::PostTask {
                                                         auction_id: auction_id.clone(),
                                                         requirement: loxi_core::TaskRequirement {
-                                                            // DUMMY REQ - Worker ignores
                                                             id: auction_id.clone(),
                                                             affinities: vec![],
                                                             min_ram_mb: 0,
+                                                            min_cpu_threads: 1, // Default
                                                             use_gpu: false,
+                                                            priority_for_owner: None, // Default
                                                             task_type: loxi_core::TaskType::Compute,
                                                             metadata: vec![],
                                                         },
-                                                        payload: Some(payload_str),
+                                                        payload: Some(wrapped_payload),
                                                     };
                                                     let _ = tx
                                                         .send(WsMessage::Text(

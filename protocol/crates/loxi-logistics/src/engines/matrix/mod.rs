@@ -17,8 +17,8 @@ pub struct ValhallaSolution {
 pub struct RoutingCost {
     pub distance: f64,
     pub time: f64,
-    pub from_index: usize,
-    pub to_index: usize,
+    pub from_index: Option<usize>,
+    pub to_index: Option<usize>,
 }
 
 pub mod downloader;

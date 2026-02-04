@@ -23,6 +23,8 @@ pub struct NodeSpecs {
     pub is_webgpu_enabled: bool,
     pub affinity_hashes: Vec<String>, // Announce cached data (e.g. H3 cells, model shards)
     pub verified_capacity: u32,       // Score from Hardware Passport (e.g., max stops handled)
+    #[serde(default)]
+    pub owner_id: Option<String>, // The partner ID that owns this node (e.g. "marcos_diaz")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,8 +32,11 @@ pub struct TaskRequirement {
     pub id: String,
     pub affinities: Vec<String>, // Generic capability/data identifiers (e.g. "loxi_vrp_v1", "h3_cell_x")
     pub min_ram_mb: u64,
+    pub min_cpu_threads: u32,
     pub use_gpu: bool,
     pub task_type: TaskType,
+    #[serde(default)]
+    pub priority_for_owner: Option<String>, // If set, prioritize workers with this owner_id
     #[serde(default)]
     pub metadata: Vec<(String, String)>, // Opaque domain metadata for the Architect
 }
@@ -233,6 +238,7 @@ mod tests {
                 is_webgpu_enabled: false,
                 affinity_hashes: vec![],
                 verified_capacity: 100,
+                owner_id: None,
             },
             NodeSpecs {
                 id: "gaming_pc".to_string(),
@@ -242,6 +248,7 @@ mod tests {
                 is_webgpu_enabled: true,
                 affinity_hashes: vec![],
                 verified_capacity: 5000,
+                owner_id: None,
             },
         ];
 
@@ -249,8 +256,10 @@ mod tests {
             id: "task_1".to_string(),
             affinities: vec!["capability_x".to_string()],
             min_ram_mb: 4000,
+            min_cpu_threads: 4,
             use_gpu: true,
             task_type: TaskType::Compute,
+            priority_for_owner: None, // Added field
             metadata: Vec::new(),
         };
 
@@ -270,6 +279,7 @@ mod tests {
                 is_webgpu_enabled: false,
                 affinity_hashes: vec!["dataset_alpha".to_string()],
                 verified_capacity: 500,
+                owner_id: None,
             },
             NodeSpecs {
                 id: "powerful_pc".to_string(),
@@ -279,6 +289,7 @@ mod tests {
                 is_webgpu_enabled: true,
                 affinity_hashes: vec![],
                 verified_capacity: 5000,
+                owner_id: None,
             },
         ];
 
@@ -286,8 +297,10 @@ mod tests {
             id: "task_2".to_string(),
             affinities: vec!["module_gamma".to_string(), "dataset_alpha".to_string()],
             min_ram_mb: 2000,
+            min_cpu_threads: 2,
             use_gpu: false,
             task_type: TaskType::Compute,
+            priority_for_owner: None, // Added field
             metadata: Vec::new(),
         };
 
