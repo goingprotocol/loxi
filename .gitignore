@@ -24,6 +24,7 @@ Thumbs.db
 *.osm.pbf
 scripts/valhalla_data/
 protocol/crates/loxi-logistics/.loxi_data.json
+protocol/.loxi_data.json
 
 # LOGISTICS BLOAT (Valhalla build libs & served artifacts)
 protocol/crates/loxi-logistics/libs/
@@ -33,6 +34,8 @@ protocol/crates/loxi-logistics/valhalla_tiles/
 # Dependencies
 node_modules/
 **/node_modules/
+package-lock.json
+package.json
 
 # AI & Logs
 chatai/
@@ -40,6 +43,7 @@ chatai/
 bench-output.txt
 test-output.txt
 benchmark-results/
+scripts/valhalla/
 
 # Secrets & Keys
 *.pem
@@ -47,7 +51,6 @@ benchmark-results/
 .env
 .env.*
 !.env.example
-protocol/.loxi_data.json
 
 # Junk & Backups
 prev_*.rs
