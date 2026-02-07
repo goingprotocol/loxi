@@ -40,3 +40,21 @@ chatai/
 bench-output.txt
 test-output.txt
 benchmark-results/
+
+# Secrets & Keys
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+protocol/.loxi_data.json
+
+# Junk & Backups
+prev_*.rs
+*.resolved
+check_output.txt
+*.html
+
+# Binaries (Specific)
+*.wasm
+*.o
