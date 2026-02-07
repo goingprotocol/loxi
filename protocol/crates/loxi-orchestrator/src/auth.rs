@@ -12,7 +12,8 @@ pub struct TicketClaims {
 }
 
 pub struct KeyManager {
-    encoding_key: EncodingKey,
+    pub encoding_key: EncodingKey,
+    #[allow(dead_code)]
     pub public_key_pem: String, // To expose to Architects
 }
 
@@ -24,10 +25,13 @@ impl KeyManager {
         });
 
         let pub_pem = env::var("RSA_PUBLIC_KEY").unwrap_or_else(|_| {
-            // In prod this is fatal, in dev we might warn
             println!("⚠️ RSA_PUBLIC_KEY not set. Architects won't be able to verify.");
             "".to_string()
         });
+
+        if !pub_pem.is_empty() {
+            println!("🔑 KeyManager: RSA Public Key ready.");
+        }
 
         let encoding_key = EncodingKey::from_rsa_pem(priv_pem.as_bytes())
             .expect("❌ Failed to parse RSA Private Key");

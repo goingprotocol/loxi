@@ -31,8 +31,6 @@ pub struct LogisticsManager {
     pub pending_problems: std::collections::HashMap<String, types::Problem>,
     pub pending_payloads: std::collections::HashMap<String, String>, // AuctionID -> Payload
     pub pending_confirmations: std::collections::HashMap<String, loxi_core::Solution>, // AuctionID -> Control Msg
-    pub pending_bids: std::collections::HashMap<String, Vec<loxi_core::Solution>>, // AuctionID -> List of Candidates
-    pub expected_results: std::collections::HashMap<String, usize>, // AuctionID -> Total Workers Assigned
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -51,8 +49,6 @@ impl LogisticsManager {
             pending_problems: std::collections::HashMap::new(),
             pending_payloads: std::collections::HashMap::new(),
             pending_confirmations: std::collections::HashMap::new(),
-            pending_bids: std::collections::HashMap::new(),
-            expected_results: std::collections::HashMap::new(),
         };
         slf.load_state();
         slf
@@ -177,7 +173,6 @@ impl LogisticsManager {
             );
 
             self.pending_problems.insert(task_id.clone(), problem);
-            self.expected_results.insert(task_id.clone(), 1);
             ids.push(task_id.clone());
             messages.push(self.auction_manager.create_auction(task_id, req));
 
@@ -245,7 +240,6 @@ impl LogisticsManager {
                 );
 
                 self.pending_problems.insert(sector_task_id.clone(), sub_problem);
-                self.expected_results.insert(sector_task_id.clone(), 1);
                 ids.push(sector_task_id.clone());
                 messages.push(self.auction_manager.create_auction(sector_task_id, req));
             }
@@ -300,7 +294,6 @@ impl LogisticsManager {
             );
 
             self.pending_problems.insert(sub_task_id.clone(), sub_problem);
-            self.expected_results.insert(sub_task_id.clone(), 1);
             ids.push(sub_task_id.clone());
 
             println!("🚀 [Engine] Created Matrix Task: {}", sub_task_id);
@@ -312,6 +305,16 @@ impl LogisticsManager {
     }
 
     pub fn handle_incoming_message(&mut self, msg: LoxiMessage) -> Vec<LoxiMessage> {
+        match &msg {
+            LoxiMessage::SubmitSolution(s) => {
+                println!("📥 Conductor: Received SubmitSolution for {}", s.auction_id)
+            }
+            LoxiMessage::PostTask { auction_id, .. } => {
+                println!("📥 Conductor: Received PostTask for {}", auction_id)
+            }
+            _ => {}
+        }
+
         match msg {
             LoxiMessage::PostTask {
                 auction_id,
@@ -358,39 +361,35 @@ impl LogisticsManager {
                 println!("✅ Manager: Received Control Signal for Auction: {}", auction_id);
 
                 if solution.payload.is_none() {
-                    // 1. Store candidate bid for evaluation
-                    self.pending_bids.entry(auction_id.clone()).or_default().push(solution.clone());
-
-                    let expected = self.expected_results.get(&auction_id).cloned().unwrap_or(1);
-                    let received = self.pending_bids.get(&auction_id).unwrap().len();
-
-                    println!(
-                        "📋 Manager: [BID] Auction {}: Registered candidate {}. ({}/{})",
-                        auction_id, solution.worker_id, received, expected
-                    );
-
-                    // 2. TRIGGER SELECTION: If threshold met (e.g., 100% for 1:1)
-                    if (received as f32) >= (expected as f32) * 1.0 {
-                        println!("🎯 Manager: Quorum met for {}. Selecting winner...", auction_id);
-                        return self.evaluate_and_reveal(auction_id);
+                    if let Some(problem) = self.pending_problems.get(&auction_id) {
+                        if problem.solution.is_some() {
+                            return Vec::new();
+                        }
                     }
+                }
 
+                let mut full_solution = solution.clone();
+                if let Some(payload) = self.pending_payloads.remove(&auction_id) {
+                    println!("🔗 Manager: Reconciled Payload for {}", auction_id);
+                    full_solution.payload = Some(payload);
+                } else {
+                    println!("⏳ Manager: Waiting for Data Plane Payload (SubmitSolution Signal Received) for {}...", auction_id);
+                    self.pending_confirmations.insert(auction_id.clone(), solution);
                     return Vec::new();
                 }
 
-                // CASE B: Reveal Signal (With Payload)
-                self.process_solution(solution)
+                self.process_solution(full_solution)
             }
             LoxiMessage::AuctionClosed { auction_id, winner_id, .. } => {
-                println!("📦 [Logistics] Auction {} CLOSED. Winner: {}", auction_id, winner_id);
+                println!("Hammer Manager: Auction {} CLOSED. Winner: {}", auction_id, winner_id);
                 Vec::new()
             }
-            LoxiMessage::PushData { .. } => {
-                // Silenced snapshots to avoid congestion in large missions
+            LoxiMessage::PushData { auction_id, progress, .. } => {
+                println!("📈 Manager: Data Pushed for {}: {}%", auction_id, progress * 100.0);
                 Vec::new()
             }
             LoxiMessage::UpdateMissionStatus { mission_id, status, .. } => {
-                println!("🚩 [Logistics] Mission {} Status -> {}", mission_id, status);
+                println!("🚩 Manager: Mission {} Status -> {}", mission_id, status);
                 Vec::new()
             }
             _ => Vec::new(),
@@ -421,8 +420,7 @@ impl LogisticsManager {
                             result.sub_problems.len(), result.unassigned_jobs.len());
 
                         if let Some(parent) = self.pending_problems.get(&auction_id) {
-                            let mission_id =
-                                solution.mission_id.clone().or_else(|| parent.mission_id.clone());
+                            let mission_id = parent.mission_id.clone();
                             let config = parent.config.clone();
 
                             let total_sub = result.sub_problems.len();
@@ -483,22 +481,22 @@ impl LogisticsManager {
                 if let Some(mut problem) = self.pending_problems.get(&auction_id).cloned() {
                     let mut matrix_parsed = false;
                     if let Some(ref payload) = solution.payload {
-                        // Try to unwrap ArtifactResponse if it exists
-                        let actual_payload = if let Ok(resp) =
-                            serde_json::from_str::<loxi_wasm_sdk::ArtifactResponse>(payload)
-                        {
-                            resp.payload
-                        } else {
-                            payload.clone()
-                        };
-
-                        if let Ok(matrix) = serde_json::from_str::<Vec<Vec<f64>>>(&actual_payload) {
+                        if let Ok(matrix) = serde_json::from_str::<Vec<Vec<f64>>>(payload) {
+                            println!(
+                                "✅ Manager: Parsed raw matrix (Vec<Vec<f64>>) for {}",
+                                auction_id
+                            );
                             problem.distance_matrix = Some(matrix);
                             matrix_parsed = true;
                         } else if let Ok(valhalla) = serde_json::from_str::<
                             crate::engines::matrix::ValhallaSolution,
-                        >(&actual_payload)
+                        >(payload)
                         {
+                            println!(
+                                "✅ Manager: Parsed Valhalla Solution ({} rows) for {}",
+                                auction_id,
+                                valhalla.sources_to_targets.len()
+                            );
                             let matrix: Vec<Vec<f64>> = valhalla
                                 .sources_to_targets
                                 .iter()
@@ -512,29 +510,47 @@ impl LogisticsManager {
                                 .collect();
                             problem.time_matrix = Some(time_matrix);
                             matrix_parsed = true;
-                        } else if let Ok(loxi_sol) =
-                            serde_json::from_str::<types::Solution>(&actual_payload)
-                        {
-                            if let Some(matrix_val) = loxi_sol.matrix {
-                                if let Ok(valhalla) = serde_json::from_value::<
-                                    crate::engines::matrix::ValhallaSolution,
-                                >(matrix_val)
-                                {
-                                    let matrix: Vec<Vec<f64>> = valhalla
-                                        .sources_to_targets
-                                        .iter()
-                                        .map(|row| row.iter().map(|cost| cost.distance).collect())
-                                        .collect();
-                                    problem.distance_matrix = Some(matrix);
-                                    let time_matrix: Vec<Vec<u32>> = valhalla
-                                        .sources_to_targets
-                                        .iter()
-                                        .map(|row| {
-                                            row.iter().map(|cost| cost.time as u32).collect()
-                                        })
-                                        .collect();
-                                    problem.time_matrix = Some(time_matrix);
-                                    matrix_parsed = true;
+                        } else {
+                            // Try to unwrap ArtifactResponse if it exists
+                            let actual_payload = if let Ok(resp) =
+                                serde_json::from_str::<loxi_wasm_sdk::ArtifactResponse>(payload)
+                            {
+                                resp.payload
+                            } else {
+                                payload.clone()
+                            };
+
+                            if let Ok(loxi_sol) =
+                                serde_json::from_str::<types::Solution>(&actual_payload)
+                            {
+                                if let Some(matrix_val) = loxi_sol.matrix {
+                                    if let Ok(valhalla) =
+                                        serde_json::from_value::<
+                                            crate::engines::matrix::ValhallaSolution,
+                                        >(matrix_val)
+                                    {
+                                        println!(
+                                            "✅ Manager: Parsed Valhalla Matrix from Loxi Solution for {}",
+                                            auction_id
+                                        );
+                                        let matrix: Vec<Vec<f64>> = valhalla
+                                            .sources_to_targets
+                                            .iter()
+                                            .map(|row| {
+                                                row.iter().map(|cost| cost.distance).collect()
+                                            })
+                                            .collect();
+                                        problem.distance_matrix = Some(matrix);
+                                        let time_matrix: Vec<Vec<u32>> = valhalla
+                                            .sources_to_targets
+                                            .iter()
+                                            .map(|row| {
+                                                row.iter().map(|cost| cost.time as u32).collect()
+                                            })
+                                            .collect();
+                                        problem.time_matrix = Some(time_matrix);
+                                        matrix_parsed = true;
+                                    }
                                 }
                             }
                         }
@@ -593,7 +609,6 @@ impl LogisticsManager {
                 }
             }
             TaskRole::Solver | TaskRole::Leaf => {
-                let mut messages = Vec::new();
                 let role_label = format!("{:?}", role);
                 println!(
                     "🏁 Manager: {} finished for {}. Saving Final Result.",
@@ -614,67 +629,9 @@ impl LogisticsManager {
                         if let Ok(solver_solution) =
                             serde_json::from_str::<types::Solution>(&actual_payload)
                         {
-                            problem.solution = Some(solver_solution.clone());
+                            problem.solution = Some(solver_solution);
                             self.pending_problems.insert(auction_id.clone(), problem.clone());
                             self.save_state();
-
-                            // 2. CHECK UNASSIGNED JOBS (Recursive Solver)
-                            if !solver_solution.unassigned_jobs.is_empty() {
-                                println!("⚠️ Manager: Solver for {} left {} unassigned jobs. Re-queuing...", 
-                                    auction_id, solver_solution.unassigned_jobs.len());
-
-                                let mut retry_problem = problem.clone();
-                                // Filter stops to only include unassigned ones
-                                retry_problem.stops = problem
-                                    .stops
-                                    .into_iter()
-                                    .filter(|s| solver_solution.unassigned_jobs.contains(&s.id))
-                                    .collect();
-                                retry_problem.solution = None;
-
-                                let retry_id = uuid::Uuid::new_v4().to_string();
-                                retry_problem.id = Some(retry_id.clone());
-
-                                let solver_hash = problem
-                                    .config
-                                    .solver_artifact_hash
-                                    .clone()
-                                    .unwrap_or_else(|| "loxi_solver_v1".to_string());
-
-                                let req = self.generate_worker_request(
-                                    retry_id.clone(),
-                                    &solver_hash,
-                                    TaskType::Compute,
-                                    problem.mission_id.clone(),
-                                    problem.config.required_contexts.clone(),
-                                    problem.config.workflow_id.clone(),
-                                    "solving-retry",
-                                    1024,
-                                    problem.config.min_cpu,
-                                    problem.config.priority_owner.clone(),
-                                );
-
-                                self.pending_problems.insert(retry_id.clone(), retry_problem);
-                                messages.push(self.auction_manager.create_auction(retry_id, req));
-                            }
-
-                            // 3. EMIT MISSION UPDATE
-                            let mission_id =
-                                solution.mission_id.clone().or_else(|| problem.mission_id.clone());
-                            if let Some(m_id) = mission_id {
-                                messages.push(LoxiMessage::UpdateMissionStatus {
-                                    mission_id: m_id.clone(),
-                                    status: "Partial Result Found".to_string(),
-                                    details: Some(format!(
-                                        "Solver finished sub-auction: {}",
-                                        auction_id
-                                    )),
-                                });
-
-                                // Check if entire mission is completed
-                                messages.extend(self.check_mission_completion(&m_id));
-                                return messages;
-                            }
                         } else {
                             println!(
                                 "❌ Manager: Failed to parse Solver payload for {}!",
@@ -683,59 +640,9 @@ impl LogisticsManager {
                         }
                     }
                 }
-                messages
+                Vec::new()
             }
         }
-    }
-
-    pub fn evaluate_and_reveal(&mut self, auction_id: String) -> Vec<LoxiMessage> {
-        let bids = self.pending_bids.get(&auction_id).cloned().unwrap_or_default();
-        if bids.is_empty() {
-            return Vec::new();
-        }
-
-        let winner = bids
-            .iter()
-            .min_by_key(|b| {
-                b.metadata
-                    .iter()
-                    .find(|(k, _)| k == "score")
-                    .and_then(|(_, v)| v.parse::<i64>().ok())
-                    .unwrap_or(i64::MAX)
-            })
-            .unwrap_or(&bids[0])
-            .clone();
-
-        println!("🏆 Manager: Winner for {} is worker {}.", auction_id, winner.worker_id);
-
-        // Step 4: REGISTRATION FOR RECONCILIATION
-        println!("📝 Registry: Storing winning bid for {} in pending_confirmations.", auction_id);
-        self.pending_confirmations.insert(auction_id.clone(), winner.clone());
-
-        // Step 5: Check for early PUSH (if payload arrived before quorum was met)
-        if let Some(payload) = self.pending_payloads.remove(&auction_id) {
-            println!(
-                "🔗 Manager: Early Payload reconciliation for {} (Payload size: {})",
-                auction_id,
-                payload.len()
-            );
-            let mut sol = winner;
-            sol.payload = Some(payload);
-            let mut msgs = self.process_solution(sol.clone());
-            if let Some(m_id) =
-                self.pending_problems.get(&auction_id).and_then(|p| p.mission_id.clone())
-            {
-                msgs.extend(self.check_mission_completion(&m_id));
-            }
-            return msgs;
-        }
-
-        // Step 6: Command Reveal via Orchestrator Relay
-        println!(
-            "🔓 Manager: Emitting RevealRequest for {} (Worker: {})",
-            auction_id, winner.worker_id
-        );
-        vec![loxi_architect_sdk::protocol::request_reveal(auction_id, winner.worker_id)]
     }
 
     pub fn handle_pushed_payload(
@@ -743,75 +650,15 @@ impl LogisticsManager {
         auction_id: String,
         payload: String,
     ) -> Vec<LoxiMessage> {
-        println!(
-            "💾 [Manager] Stored Pushed Payload for {}. Size: {} bytes.",
-            auction_id,
-            payload.len()
-        );
+        println!("💾 Manager: Stored Pushed Payload for {}", auction_id);
 
-        // Check if Control Signal is waiting
         if let Some(solution) = self.pending_confirmations.remove(&auction_id) {
-            println!("🔗 [Manager] Late Reconciliation Success for {}", auction_id);
+            println!("🔗 Manager: Late Reconciliation for {}", auction_id);
             let mut full_solution = solution.clone();
-            full_solution.payload = Some(payload); // Inject
-            self.process_solution(full_solution)
+            full_solution.payload = Some(payload);
+            return self.process_solution(full_solution);
         } else {
-            println!(
-                "⏳ [Manager] Payload arrived but NO confirmation found for {}. Available: {:?}",
-                auction_id,
-                self.pending_confirmations.keys().collect::<Vec<_>>()
-            );
             self.pending_payloads.insert(auction_id, payload);
-            Vec::new()
-        }
-    }
-
-    pub fn check_mission_completion(&mut self, mission_id: &str) -> Vec<LoxiMessage> {
-        // Find ALL problems associated with this mission, regardless of role
-        // Find counts without cloning full payloads
-        let (completed_count, total_count, has_final_results) = {
-            let mission_problems = self
-                .pending_problems
-                .values()
-                .filter(|p| p.mission_id.as_deref() == Some(mission_id));
-
-            let mut completed = 0;
-            let mut total = 0;
-            let mut final_res = false;
-
-            for p in mission_problems {
-                total += 1;
-                if p.solution.is_some() {
-                    completed += 1;
-                }
-                if p.role == TaskRole::Solver || p.role == TaskRole::Leaf {
-                    final_res = true;
-                }
-            }
-            (completed, total, final_res)
-        };
-
-        if total_count == 0 {
-            return Vec::new();
-        }
-
-        println!("📈 Mission {} Integrity Check: {}/{}", mission_id, completed_count, total_count);
-
-        if completed_count == total_count && total_count > 0 {
-            if has_final_results {
-                println!("🎉 MISSION COMPLETED: {}", mission_id);
-                vec![LoxiMessage::UpdateMissionStatus {
-                    mission_id: mission_id.to_string(),
-                    status: "Finished".to_string(),
-                    details: Some(format!(
-                        "All {} hierarchical stages of the global plan have been resolved.",
-                        total_count
-                    )),
-                }]
-            } else {
-                Vec::new()
-            }
-        } else {
             Vec::new()
         }
     }

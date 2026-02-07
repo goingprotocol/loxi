@@ -34,6 +34,7 @@ export interface WorkerLease {
 
 export interface Solution {
     auction_id: string;
+    mission_id?: string;
     worker_id: string;
     result_hash: string;
     payload: string | null;
@@ -74,7 +75,7 @@ export type LoxiMessage =
     | { PushData: { auction_id: string, payload: string, progress: number } }
     | { PushSolution: { auction_id: string, ticket: string, payload: string } }
     | { AuctionClosed: { auction_id: string, winner_id: string, winning_hash: string } }
-    | { RevealRequest: { auction_id: string, destination: string } }
+    | { RevealRequest: { auction_id: string, worker_id: string, destination: string } }
     | { UpdateMissionStatus: { mission_id: string, status: string, details?: string } }
     | { KeepAlive: {} }
     | { Error: string };
@@ -85,7 +86,7 @@ export class LoxiWorkerDevice {
     private activeLease: WorkerLease | null = null;
     private isBidding: boolean = false;
     private eventListeners: ((event: WorkerEvent) => void)[] = [];
-    private pendingReveal: { auction_id: string, ticket: string, payload: string, architect_address: string } | null = null;
+    private pendingReveals = new Map<string, { ticket: string, payload: string, architect_address: string }>();
 
     private constraints: { maxRamMb?: number, maxThreads?: number } = {};
 
@@ -202,9 +203,11 @@ export class LoxiWorkerDevice {
 
         if (msg.RevealRequest) {
             const req = msg.RevealRequest;
-            if (this.pendingReveal && this.pendingReveal.auction_id === req.auction_id) {
-                this.addLog(`🔓 Revealing data for ${req.auction_id}`, "action");
-                this.revealingSolution(this.pendingReveal);
+            const pending = this.pendingReveals.get(req.auction_id);
+            if (pending) {
+                this.addLog(`🔓 Merit Granted. Revealing payload for ${req.auction_id}`, "success");
+                this.revealingSolution(req.auction_id, pending);
+                this.pendingReveals.delete(req.auction_id); // Clear state
             }
         }
     }
@@ -295,29 +298,49 @@ export class LoxiWorkerDevice {
             const result = await module.run(payload, context);
             const duration = Date.now() - start;
 
-            // 4. COMMIT
-            const resultString = JSON.stringify(result);
-            const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(resultString));
-            const hashArray = Array.from(new Uint8Array(hashBuffer));
-            const resultHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            // 4. COMMIT (Loxi Protocol v3 Handshake)
+            let resultString: string;
+            let resultHash: string;
+            let score: string = duration.toString(); // Default to duration if no cost
 
-            this.pendingReveal = {
-                auction_id: lease.auction_id,
+            // Check if artifact follows the ArtifactResponse ABI (payload, hash, cost)
+            if (result && typeof result === 'object' && 'hash' in result && 'payload' in result) {
+                resultString = result.payload;
+                resultHash = result.hash;
+                if ('cost' in result) score = String(result.cost);
+                this.addLog(`🧪 Artifact reported Score: ${score}`, "info");
+            } else {
+                // Legacy / Raw Solution
+                resultString = typeof result === 'string' ? result : JSON.stringify(result);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(resultString));
+                const hashArray = Array.from(new Uint8Array(hashBuffer));
+                resultHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            }
+
+            this.pendingReveals.set(lease.auction_id, {
                 ticket: lease.ticket,
                 payload: resultString,
                 architect_address: archAddr
-            };
+            });
+
+            // Send COMMIT to Orchestrator (No Payload)
+            const missionId = lease.metadata?.find(m => m[0] === 'mission_id')?.[1];
 
             this.ws?.send(JSON.stringify({
                 SubmitSolution: {
                     auction_id: lease.auction_id,
+                    mission_id: missionId,
                     worker_id: this.specs?.id,
                     result_hash: resultHash,
                     payload: null,
-                    metadata: [["duration", duration.toString()]]
+                    metadata: [
+                        ["duration", duration.toString()],
+                        ["score", score]
+                    ]
                 }
             }));
 
+            this.addLog(`🔒 Commit Sent (Hash: ${resultHash.substring(0, 8)}...). Awaiting Merit Reveal...`, "success");
             this.emit({ type: 'TASK_COMPLETED', auction_id: lease.auction_id, duration });
 
         } catch (err: any) {
@@ -329,12 +352,12 @@ export class LoxiWorkerDevice {
         }
     }
 
-    private revealingSolution(pending: any) {
+    private revealingSolution(auctionId: string, pending: any) {
         const ws = new WebSocket(pending.architect_address);
         ws.onopen = () => {
             ws.send(JSON.stringify({
                 PushSolution: {
-                    auction_id: pending.auction_id,
+                    auction_id: auctionId,
                     ticket: pending.ticket,
                     payload: pending.payload
                 }

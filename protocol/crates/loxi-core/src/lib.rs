@@ -69,6 +69,7 @@ pub struct DomainAuthority {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Solution {
     pub auction_id: String,
+    pub mission_id: Option<String>,
     pub worker_id: String,
     pub result_hash: String,
     pub payload: Option<String>,
@@ -144,6 +145,7 @@ pub enum Message {
     // Orquestador -> Ganador: Orden de subir la data pesada al Architect
     RevealRequest {
         auction_id: String,
+        worker_id: String,
         destination: String,
     },
 

@@ -1,6 +1,5 @@
 use futures_util::{SinkExt, StreamExt};
 use loxi_core::{Message as LoxiMessage, NodeSpecs, WorkerLease};
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
@@ -12,19 +11,23 @@ mod scheduler;
 use scheduler::Scheduler;
 mod auth;
 use auth::KeyManager;
+use dashmap::DashMap;
 use dotenv::dotenv;
 
 // Global State
-type PeerMap = Arc<Mutex<HashMap<String, mpsc::Sender<WsMessage>>>>;
-type NodeRegistry = Arc<Mutex<HashMap<String, NodeSpecs>>>;
-type AuthorityRegistry = Arc<Mutex<HashMap<String, String>>>;
+type PeerMap = Arc<DashMap<String, mpsc::Sender<WsMessage>>>;
+type NodeRegistry = Arc<DashMap<String, NodeSpecs>>;
+type AuthorityRegistry = Arc<DashMap<String, String>>;
 type SharedScheduler = Arc<Mutex<Scheduler>>; // New Brain
 type SharedKeyManager = Arc<KeyManager>; // Security
-type ActiveAuctions = Arc<Mutex<HashMap<String, AuctionMetadata>>>; // Consensus & Tracking
+type ActiveAuctions = Arc<DashMap<String, AuctionMetadata>>; // Consensus & Tracking
 
 pub struct AuctionMetadata {
     pub poster_id: String,
     pub consensus_hashes: Vec<String>,
+    // [FAULT TOLERANCE] Persist Requirement for Re-Scheduling
+    pub original_req: Option<loxi_core::TaskRequirement>,
+    pub assigned_worker_id: Option<String>,
 }
 
 #[tokio::main]
@@ -35,12 +38,12 @@ async fn main() {
     let listener = TcpListener::bind(&addr).await.expect("Failed to bind");
     println!("Loxi Grid Orchestrator (Heap Dispatch V2 + Security) listening on: {}", addr);
 
-    let peers: PeerMap = Arc::new(Mutex::new(HashMap::new()));
-    let nodes: NodeRegistry = Arc::new(Mutex::new(HashMap::new()));
-    let authorities: AuthorityRegistry = Arc::new(Mutex::new(HashMap::new()));
+    let peers: PeerMap = Arc::new(DashMap::new());
+    let nodes: NodeRegistry = Arc::new(DashMap::new());
+    let authorities: AuthorityRegistry = Arc::new(DashMap::new());
     let scheduler: SharedScheduler = Arc::new(Mutex::new(Scheduler::new()));
     let key_manager: SharedKeyManager = Arc::new(KeyManager::new()); // Init Keys
-    let active_auctions: ActiveAuctions = Arc::new(Mutex::new(HashMap::new()));
+    let active_auctions: ActiveAuctions = Arc::new(DashMap::new());
 
     while let Ok((stream, addr)) = listener.accept().await {
         tokio::spawn(handle_connection(
@@ -70,11 +73,23 @@ async fn handle_connection(
     let ws_stream = accept_async(stream).await.expect("Error during the websocket handshake");
     let (mut sink, mut stream) = ws_stream.split();
 
-    let (tx, mut rx) = mpsc::channel::<WsMessage>(32);
+    let (tx, mut rx) = mpsc::channel::<WsMessage>(1024);
 
+    // 1. WebSocket Writer Loop
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if let Err(_) = sink.send(msg).await {
+                break;
+            }
+        }
+    });
+
+    // 2. Heartbeat Task (Keep transitions alive during CPU-heavy tasks)
+    let hb_tx = tx.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(20)).await;
+            if hb_tx.send(WsMessage::Ping(Vec::new())).await.is_err() {
                 break;
             }
         }
@@ -99,11 +114,56 @@ async fn handle_connection(
                         println!("✅ Node Registered: {} (RAM: {}MB)", id, node_specs.ram_mb);
                         current_node_id = Some(id.clone());
 
-                        nodes_map.lock().await.insert(id.clone(), node_specs.clone());
-                        peers_map.lock().await.insert(id.clone(), tx.clone());
+                        // Register in Maps
+                        nodes_map.insert(id.clone(), node_specs.clone());
+                        peers_map.insert(id.clone(), tx.clone());
 
-                        // HEAP: Add to Idle Pool proactively
-                        scheduler.lock().await.add_worker(node_specs);
+                        // Add to Scheduler & Check for IMMEDIATE Pending Task (Queue Draining)
+                        let immediate_assignment = scheduler.lock().await.add_worker(node_specs);
+
+                        if let Some((
+                            assignment,
+                            task_id,
+                            poster_id,
+                            next_affinities,
+                            next_metadata,
+                        )) = immediate_assignment
+                        {
+                            // [FAULT TOLERANCE] Track who has it
+                            if let Some(mut meta) = active_auctions.get_mut(&task_id) {
+                                meta.assigned_worker_id = Some(id.clone());
+                            }
+
+                            // Resolve Architect Address
+                            let mut architect_addr = "grid://orchestrator".to_string();
+                            if let Some(addr) = authorities_map.get(&poster_id) {
+                                architect_addr = addr.value().clone();
+                            }
+
+                            // EXTRACT SENDER TO AVOID HOLDING DASHMAP REF ACROSS AWAIT
+                            let worker_tx_opt = peers_map.get(&id).map(|p| p.value().clone());
+
+                            if let Some(worker_tx) = worker_tx_opt {
+                                // SIGN TICKET
+                                let ticket = key_manager.sign_ticket(&id, &task_id);
+
+                                let lease = WorkerLease {
+                                    auction_id: task_id,
+                                    worker_id: id.clone(),
+                                    architect_address: architect_addr,
+                                    task_type: assignment.task_type,
+                                    ticket: ticket,
+                                    affinities: next_affinities,
+                                    metadata: next_metadata,
+                                };
+                                let _ = worker_tx
+                                    .send(WsMessage::Text(
+                                        serde_json::to_string(&LoxiMessage::LeaseAssignment(lease))
+                                            .unwrap(),
+                                    ))
+                                    .await;
+                            }
+                        }
                     }
                     LoxiMessage::RegisterAuthority(auth) => {
                         let id = auth.domain_id.clone();
@@ -112,16 +172,16 @@ async fn handle_connection(
                             id, auth.authority_address
                         );
                         current_authority_id = Some(id.clone());
-                        authorities_map.lock().await.insert(id.clone(), auth.authority_address);
-                        peers_map.lock().await.insert(id, tx.clone());
+                        authorities_map.insert(id.clone(), auth.authority_address);
+                        peers_map.insert(id, tx.clone());
                     }
-                    LoxiMessage::RequestLease {
-                        domain_id: auction_id,
-                        requirement,
-                        count: _count,
-                    } => {
+                    LoxiMessage::RequestLease { domain_id, requirement, count: _count } => {
+                        let auction_id = requirement.id.clone();
                         // HEAP DISPATCH LOGIC
-                        println!("📥 Received Task {}. Attempting Direct Dispatch...", auction_id);
+                        println!(
+                            "📥 Received Task {} for {}. Attempting Direct Dispatch...",
+                            auction_id, domain_id
+                        );
 
                         let poster_id = if let Some(ref id) = current_authority_id {
                             id.clone()
@@ -138,63 +198,73 @@ async fn handle_connection(
                         // NON-BLOCKING DISPATCH
                         tokio::spawn(async move {
                             // TRACK OWNERSHIP
-                            // Note: We use block scope to drop lock asap if needed, or just standard await
-                            active_auctions.lock().await.insert(
+                            println!(
+                                "📢 New Auction: {} (Affinity: {:?})",
+                                auction_id, requirement.affinities
+                            );
+
+                            // 1. Register Auction with RECOVERY support (Using UNIQUE task id)
+                            active_auctions.insert(
                                 auction_id.clone(),
                                 AuctionMetadata {
                                     poster_id: poster_id.clone(),
                                     consensus_hashes: Vec::new(),
+                                    original_req: Some(requirement.clone()), // Save for later
+                                    assigned_worker_id: None,
                                 },
                             );
 
-                            let assignment_opt = scheduler.lock().await.schedule_task(
-                                auction_id.clone(),
-                                requirement.clone(),
-                                poster_id.clone(),
-                            );
+                            let active_auctions_ref = active_auctions.clone(); // Clone for closure
 
-                            if let Some(assignment) = assignment_opt {
-                                // INSTANT WINNER!
-                                println!(
-                                    "🎯 DIRECT HIT! Assigned Task {} to {}",
-                                    auction_id, assignment.node_id
+                            // 2. Schedule Task
+                            tokio::spawn(async move {
+                                let assignment_opt = scheduler.lock().await.schedule_task(
+                                    auction_id.clone(),
+                                    requirement.clone(),
+                                    poster_id.clone(),
                                 );
 
-                                // Send LeaseAssignment to Worker
-                                let peers = peers_map.lock().await;
-                                if let Some(worker_tx) = peers.get(&assignment.node_id) {
-                                    // Resolve Architect Address
-                                    let mut architect_addr = "grid://orchestrator".to_string();
-                                    let auths = authorities_map.lock().await;
-                                    if let Some(addr) = auths.get(&poster_id) {
-                                        architect_addr = addr.clone();
+                                if let Some(assignment) = assignment_opt {
+                                    // [FAULT TOLERANCE] Track who has it
+                                    if let Some(mut meta) = active_auctions_ref.get_mut(&auction_id)
+                                    {
+                                        meta.assigned_worker_id = Some(assignment.node_id.clone());
                                     }
 
-                                    // SIGN TICKET
-                                    let ticket =
-                                        key_manager.sign_ticket(&assignment.node_id, &auction_id);
+                                    // Send LeaseAssignment to Worker
+                                    let worker_tx_opt = peers_map
+                                        .get(&assignment.node_id)
+                                        .map(|p| p.value().clone());
 
-                                    let lease = WorkerLease {
-                                        auction_id: auction_id.clone(),
-                                        worker_id: assignment.node_id.clone(),
-                                        architect_address: architect_addr,
-                                        task_type: assignment.task_type,
-                                        ticket: ticket,
-                                        affinities: requirement.affinities.clone(),
-                                        metadata: requirement.metadata.clone(),
-                                    };
-                                    let _ = worker_tx
-                                        .send(WsMessage::Text(
-                                            serde_json::to_string(&LoxiMessage::LeaseAssignment(
-                                                lease,
+                                    if let Some(worker_tx) = worker_tx_opt {
+                                        let mut architect_addr = "grid://orchestrator".to_string();
+                                        if let Some(addr) = authorities_map.get(&poster_id) {
+                                            architect_addr = addr.value().clone();
+                                        }
+
+                                        let ticket = key_manager
+                                            .sign_ticket(&assignment.node_id, &auction_id);
+
+                                        let lease = WorkerLease {
+                                            auction_id: auction_id.clone(),
+                                            worker_id: assignment.node_id.clone(),
+                                            architect_address: architect_addr,
+                                            task_type: assignment.task_type,
+                                            ticket: ticket,
+                                            affinities: requirement.affinities.clone(),
+                                            metadata: requirement.metadata.clone(),
+                                        };
+                                        let _ = worker_tx
+                                            .send(WsMessage::Text(
+                                                serde_json::to_string(
+                                                    &LoxiMessage::LeaseAssignment(lease),
+                                                )
+                                                .unwrap(),
                                             ))
-                                            .unwrap(),
-                                        ))
-                                        .await;
+                                            .await;
+                                    }
                                 }
-                            } else {
-                                println!("zzz Task {} Queued (Zero Latency Backlog)", auction_id);
-                            }
+                            });
                         });
                     }
                     LoxiMessage::SubmitSolution(solution) => {
@@ -205,69 +275,35 @@ async fn handle_connection(
                         let nodes_map = nodes_map.clone();
                         let authorities_map = authorities_map.clone(); // Needed for looking up architect addr if needed
                         let scheduler = scheduler.clone();
-                        let tx = tx.clone(); // To reply to this worker (RevealRequest)
                         let key_manager = key_manager.clone();
 
                         // NON-BLOCKING EVALUATION
                         tokio::spawn(async move {
                             // 1. CONSENSUS VERIFICATION
-                            let mut auctions = active_auctions.lock().await;
-
-                            if let Some(meta) = auctions.get_mut(&solution.auction_id) {
-                                println!("🔒 Consensus Check: Hash={}", solution.result_hash);
+                            let auth_tx = if let Some(mut meta) =
+                                active_auctions.get_mut(&solution.auction_id)
+                            {
                                 meta.consensus_hashes.push(solution.result_hash.clone());
+                                peers_map.get(&meta.poster_id).map(|p| p.value().clone())
+                            } else {
+                                None
+                            };
 
-                                // 2. SEND REVEAL REQUEST TO WORKER (COMMIT-REVEAL)
-                                let reveal_msg = LoxiMessage::RevealRequest {
-                                    auction_id: solution.auction_id.clone(),
-                                    destination: "architect_lookup_pending".to_string(), // In V4 we lookup. V3 assumes Worker knows.
-                                };
+                            if let Some(tx) = auth_tx {
                                 let _ = tx
                                     .send(WsMessage::Text(
-                                        serde_json::to_string(&reveal_msg).unwrap(),
+                                        serde_json::to_string(&LoxiMessage::SubmitSolution(
+                                            solution.clone(),
+                                        ))
+                                        .unwrap(),
                                     ))
                                     .await;
-
-                                // 3. RELAY PROOF TO TRUE OWNER
-                                let peers = peers_map.lock().await;
-                                if let Some(auth_tx) = peers.get(&meta.poster_id) {
-                                    // Forward only the Proof (Hash)
-                                    let _ = auth_tx
-                                        .send(WsMessage::Text(
-                                            serde_json::to_string(&LoxiMessage::SubmitSolution(
-                                                solution.clone(),
-                                            ))
-                                            .unwrap(),
-                                        ))
-                                        .await;
-                                    println!(
-                                        "📤 Relayed Proof for {} to Owner '{}'.",
-                                        solution.auction_id, meta.poster_id
-                                    );
-                                } else {
-                                    println!(
-                                        "⚠️ Could not relay: Owner '{}' disconnected.",
-                                        meta.poster_id
-                                    );
-                                }
-                            } else {
-                                println!(
-                                    "⚠️ Solution for unknown/expired auction: {}",
-                                    solution.auction_id
-                                );
-                                return; // Stop if invalid
                             }
-
-                            // drop lock before release logic
-                            drop(auctions);
 
                             let worker_id = solution.worker_id.clone();
 
                             // 4. WORKER RELEASE & PIPELINING
-                            let final_specs = {
-                                let nodes = nodes_map.lock().await;
-                                nodes.get(&worker_id).cloned()
-                            };
+                            let final_specs = nodes_map.get(&worker_id).map(|n| n.clone());
 
                             if let Some(specs) = final_specs {
                                 let piped_result =
@@ -283,16 +319,22 @@ async fn handle_connection(
                                 {
                                     println!(
                                         "🔥 PIPELINE: Worker {} immediately re-assigned to {}",
-                                        worker_id, assignment.node_id
+                                        worker_id, next_task_id
                                     );
 
+                                    // TRACK ASSIGNMENT IN STATE
+                                    if let Some(mut meta) = active_auctions.get_mut(&next_task_id) {
+                                        meta.assigned_worker_id = Some(worker_id.clone());
+                                    }
+
                                     // Send NEXT Lease
-                                    let peers = peers_map.lock().await;
-                                    if let Some(worker_tx) = peers.get(&worker_id) {
+                                    let worker_tx_opt =
+                                        peers_map.get(&worker_id).map(|p| p.value().clone());
+
+                                    if let Some(worker_tx) = worker_tx_opt {
                                         let mut architect_addr = "grid://orchestrator".to_string();
-                                        let auths = authorities_map.lock().await;
-                                        if let Some(addr) = auths.get(&next_poster_id) {
-                                            architect_addr = addr.clone();
+                                        if let Some(addr) = authorities_map.get(&next_poster_id) {
+                                            architect_addr = addr.value().clone();
                                         }
 
                                         let ticket =
@@ -320,7 +362,30 @@ async fn handle_connection(
                             }
                         });
                     }
-                    // Handle all other messages gracefully
+                    LoxiMessage::RevealRequest { auction_id, worker_id, destination } => {
+                        println!(
+                            "🔓 Reveal Requested for {} -> Worker {}. Mode: {}",
+                            auction_id, worker_id, destination
+                        );
+                        let peers_map = peers_map.clone();
+
+                        tokio::spawn(async move {
+                            let worker_tx_opt =
+                                peers_map.get(&worker_id).map(|p| p.value().clone());
+                            if let Some(tx) = worker_tx_opt {
+                                let _ = tx
+                                    .send(WsMessage::Text(
+                                        serde_json::to_string(&LoxiMessage::RevealRequest {
+                                            auction_id,
+                                            worker_id,
+                                            destination,
+                                        })
+                                        .unwrap(),
+                                    ))
+                                    .await;
+                            }
+                        });
+                    }
                     _ => {}
                 }
             } else {
@@ -336,7 +401,32 @@ async fn handle_connection(
 
     if let Some(id) = current_node_id {
         println!("❌ Node Left: {}", id);
-        nodes_map.lock().await.remove(&id);
-        peers_map.lock().await.remove(&id);
+        nodes_map.remove(&id);
+        peers_map.remove(&id);
+
+        // [FAULT TOLERANCE] RECOVERY PROCEDURE
+        // 1. Find all auctions assigned to this dead node
+        // Collect IDs first
+        let abandoned_task_ids: Vec<String> = active_auctions
+            .iter()
+            .filter(|r| r.value().assigned_worker_id.as_deref() == Some(&id))
+            .map(|r| r.key().clone())
+            .collect();
+
+        for task_id in abandoned_task_ids {
+            if let Some(mut meta) = active_auctions.get_mut(&task_id) {
+                if let Some(req) = meta.original_req.clone() {
+                    println!(
+                        "🚑 RECOVERY: Re-scheduling abandoned Task {} (was on {})",
+                        task_id, id
+                    );
+                    meta.assigned_worker_id = None;
+                    let poster_id = meta.poster_id.clone();
+                    drop(meta); // Release entry before scheduling
+
+                    scheduler.lock().await.schedule_task(task_id, req, poster_id);
+                }
+            }
+        }
     }
 }

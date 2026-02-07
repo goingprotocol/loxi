@@ -45,10 +45,22 @@ async fn main() {
         .expect("Failed to register");
     println!("📝 Registered Logistics Authority (Data Port: 3006)");
 
-    // 3. Create channel for Orchestrator communication
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<LoxiMessage>(32);
+    // 3. Create channel for ALL outgoing Orchestrator communication
+    let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel::<WsMessage>(2048);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<LoxiMessage>(1024);
 
-    // 4. Start the Direct Data Server in the background
+    // 4. Background WS Writer Task
+    let _outgoing_tx_for_http = outgoing_tx.clone();
+    tokio::spawn(async move {
+        while let Some(msg) = outgoing_rx.recv().await {
+            if let Err(e) = write.send(msg).await {
+                println!("❌ WebSocket Writer Error: {}", e);
+                break;
+            }
+        }
+    });
+
+    // 5. Start the Direct Data Server in the background
     let provider = std::sync::Arc::new(LogisticsDataProvider { manager: manager_arc.clone() });
     let data_server = DataServer::new(provider, "logistics".to_string());
     let tx_for_server = tx.clone();
@@ -59,7 +71,7 @@ async fn main() {
         }
     });
 
-    // 5. Start HTTP Server for Problem Submission (from Web UI)
+    // 6. Start HTTP Server for Problem Submission (from Web UI)
     let manager_for_http = manager_arc.clone();
     let tx_clone = tx.clone();
 
@@ -95,7 +107,7 @@ async fn main() {
                     );
                     let (messages, ids) = mg.distribute_tasks(mission_id.clone(), &problem);
 
-                    // Send all initial tasks through the channel
+                    // Send all initial tasks through the internal message handler
                     for msg in messages {
                         if let Err(e) = tx.send(msg).await {
                             println!("❌ Failed to queue task: {}", e);
@@ -181,61 +193,67 @@ async fn main() {
 
     println!("📡 Awaiting tasks from the grid...");
 
-    // 6. Main Event Loop: Handle both WebSocket messages and HTTP-queued tasks
-    loop {
-        tokio::select! {
-            // Handle messages from Orchestrator
-            Some(msg) = read.next() => {
-                match msg {
-                    Ok(WsMessage::Text(text)) => {
-                        match serde_json::from_str::<LoxiMessage>(&text) {
-                            Ok(loxi_msg) => {
-                                let next_msgs = {
-                                    let mut mg = manager_arc.lock().await;
-
-                                    // The Conductor handles:
-                                    // - PostTask (Adopts problems from web/others)
-                                    // - SubmitSolution (Triggers next stages: Matrix -> Solve)
-                                    mg.handle_incoming_message(loxi_msg)
-                                }; // LOCK RELEASED
-
-                                for next_msg in next_msgs {
-                                    let payload = serde_json::to_string(&next_msg).unwrap();
-                                    if let Err(e) = write.send(WsMessage::Text(payload)).await {
-                                        println!("❌ Failed to send: {}", e);
-                                        break;
-                                    }
-                                }
-                                // Yield to allow Data Server (Sala) to acquire lock
-                                tokio::task::yield_now().await;
+    // 7. Independent Reader Loop
+    let reader_manager_arc = manager_arc.clone();
+    let reader_outgoing_tx = outgoing_tx.clone();
+    let mut reader_handle = tokio::spawn(async move {
+        while let Some(msg) = read.next().await {
+            match msg {
+                Ok(WsMessage::Text(text)) => match serde_json::from_str::<LoxiMessage>(&text) {
+                    Ok(loxi_msg) => {
+                        let manager = reader_manager_arc.clone();
+                        let tx = reader_outgoing_tx.clone();
+                        tokio::spawn(async move {
+                            let next_msgs = {
+                                let mut mg = manager.lock().await;
+                                mg.handle_incoming_message(loxi_msg)
+                            };
+                            for next_msg in next_msgs {
+                                let payload = serde_json::to_string(&next_msg).unwrap();
+                                let _ = tx.send(WsMessage::Text(payload)).await;
                             }
-                            Err(e) => {
-                                // DEBUG: If it's a PostTask or SubmitSolution that we care about, show why it failed.
-                                if text.contains("PostTask") || text.contains("Submit") {
-                                    println!("⚠️ Protocol Mismatch: {}\nText Preview: {}", e, &text[..std::cmp::min(100, text.len())]);
-                                }
-                            }
-                        }
+                        });
                     }
                     Err(e) => {
-                        println!("Disconnected: {}", e);
-                        break;
+                        if text.contains("PostTask") || text.contains("Submit") {
+                            println!(
+                                "⚠️ Protocol Mismatch: {}\nText Preview: {}",
+                                e,
+                                &text[..std::cmp::min(100, text.len())]
+                            );
+                        }
                     }
-                    _ => {}
+                },
+                Ok(WsMessage::Ping(p)) => {
+                    let _ = reader_outgoing_tx.send(WsMessage::Pong(p)).await;
                 }
-            }
-
-            // Handle tasks queued from HTTP server
-            Some(msg) = rx.recv() => {
-                println!("📤 Sending HTTP-queued task to Orchestrator...");
-                let payload = serde_json::to_string(&msg).unwrap();
-                if let Err(e) = write.send(WsMessage::Text(payload)).await {
-                    println!("❌ Failed to send HTTP-queued task: {}", e);
+                Err(e) => {
+                    println!("❌ WebSocket Read Error: {}", e);
                     break;
-                } else {
-                    println!("✅ Task sent to Orchestrator");
                 }
+                _ => {}
             }
         }
+    });
+
+    // 8. Independent Internal Message Loop (from HTTP/DataServer)
+    let _internal_manager_arc = manager_arc.clone();
+    let internal_outgoing_tx = outgoing_tx.clone();
+    let mut internal_handle = tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            let payload = serde_json::to_string(&msg).unwrap();
+            if let Err(e) = internal_outgoing_tx.send(WsMessage::Text(payload)).await {
+                println!("❌ Failed to queue internal message: {}", e);
+                break;
+            }
+        }
+    });
+
+    // 9. Wait for either to fail
+    tokio::select! {
+        _ = &mut reader_handle => println!("💀 Reader loop terminated."),
+        _ = &mut internal_handle => println!("💀 Internal loop terminated."),
     }
+
+    println!("🔌 Connection closed. Exiting Conductor.");
 }

@@ -1,4 +1,4 @@
-use loxi_core::{Assignment, NodeSpecs, TaskRequirement, TaskType};
+use loxi_core::{Assignment, NodeSpecs, TaskRequirement};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
 
@@ -51,8 +51,21 @@ impl Scheduler {
         }
     }
 
-    pub fn add_worker(&mut self, specs: NodeSpecs) {
-        // Calculate Score once
+    pub fn add_worker(
+        &mut self,
+        specs: NodeSpecs,
+    ) -> Option<(Assignment, String, String, Vec<String>, Vec<(String, String)>)> {
+        // [QUEUE DRAIN] First, check if this new worker can take a pending task immediately
+        if let Some(match_result) = self.try_match_pending(&specs) {
+            return Some(match_result);
+        }
+
+        self.add_worker_to_pool(specs);
+        None
+    }
+
+    // INTERNAL HELPER: Just push to heap
+    fn add_worker_to_pool(&mut self, specs: NodeSpecs) {
         let hardware_score = specs.ram_mb / 1024 + (specs.thread_count as u64 * 10);
         let tier_score = if specs.is_webgpu_enabled && specs.ram_mb >= 16000 {
             3000
@@ -61,9 +74,6 @@ impl Scheduler {
         } else {
             1000
         };
-        // Note: Affinity is task-dependent, so in a pure Heap we score on RAW POWER.
-        // Task-specific affinity would require multiple queues or scanning (which defeats O(1)).
-        // For V1 Scalability, "Power" is the primary sorting metric.
 
         let node = WorkerNode {
             id: specs.id,
@@ -109,18 +119,32 @@ impl Scheduler {
         self.busy_nodes.remove(worker_id);
 
         // 2. SMART PIPE: Scan queue for FIRST compatible task
-        // We cannot just pop_front() because the head of the queue might be a Matrix task
-        // while the freed worker is Mobile (Generic). Blind popping causes mismatches.
+        if let Some(match_result) = self.try_match_pending(&original_specs) {
+            return Some(match_result);
+        } else {
+            // 2b. No compatible pending tasks -> Return to Heap
+            self.add_worker_to_pool(original_specs);
+            return None;
+        }
+    }
+
+    // INTERNAL HELPER: Distributed Queue Matching
+    fn try_match_pending(
+        &mut self,
+        specs: &NodeSpecs,
+    ) -> Option<(Assignment, String, String, Vec<String>, Vec<(String, String)>)> {
+        // We cannot just pop_front() because the head of the queue might be a Specialized task
+        // while the freed/new worker is General (Generic). Blind popping causes mismatches.
         let match_idx = self.task_queue.iter().position(|(_id, req, _poster)| {
-            let ram_ok = original_specs.ram_mb >= req.min_ram_mb;
-            let cpu_ok = original_specs.thread_count >= req.min_cpu_threads;
-            let gpu_ok = !req.use_gpu || original_specs.is_webgpu_enabled;
+            let ram_ok = specs.ram_mb >= req.min_ram_mb;
+            let cpu_ok = specs.thread_count >= req.min_cpu_threads;
+            let gpu_ok = !req.use_gpu || specs.is_webgpu_enabled;
 
             // Strict Affinity: If task needs affinity, worker MUST have it.
             let affinity_ok = if req.affinities.is_empty() {
                 true
             } else {
-                req.affinities.iter().any(|a| original_specs.affinity_hashes.contains(a))
+                req.affinities.iter().any(|a| specs.affinity_hashes.contains(a))
             };
 
             ram_ok && cpu_ok && gpu_ok && affinity_ok
@@ -130,18 +154,15 @@ impl Scheduler {
             // Match found! Extract specifically that task.
             let (task_id, req, posted_by) = self.task_queue.remove(idx).unwrap();
 
-            println!("⚡ Scheduler: Piping pending task {} to freed worker {}", task_id, worker_id);
+            println!("⚡ Scheduler: Piping pending task {} to worker {}", task_id, specs.id);
             let affinities = req.affinities.clone();
             let metadata = req.metadata.clone();
-            let assignment =
-                Assignment { node_id: worker_id.to_string(), task_type: req.task_type };
-            self.busy_nodes.insert(worker_id.to_string(), assignment.clone());
+            let assignment = Assignment { node_id: specs.id.clone(), task_type: req.task_type };
+            self.busy_nodes.insert(specs.id.clone(), assignment.clone());
             return Some((assignment, task_id, posted_by, affinities, metadata));
-        } else {
-            // 2b. No compatible pending tasks -> Return to Heap
-            self.add_worker(original_specs);
-            return None;
         }
+
+        None
     }
 
     /// For V1 massive scale, we assume homogeneous or "Smart Popping".

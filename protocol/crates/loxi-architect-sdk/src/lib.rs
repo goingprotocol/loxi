@@ -8,6 +8,15 @@ use tokio::sync::{mpsc, Mutex};
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
+pub mod protocol {
+    use loxi_core::Message as LoxiMessage;
+
+    /// Generates a RevealRequest message to trigger the direct push from a worker.
+    pub fn request_reveal(auction_id: String, worker_id: String) -> LoxiMessage {
+        LoxiMessage::RevealRequest { auction_id, worker_id, destination: "direct_push".to_string() }
+    }
+}
+
 /// Trait that any Domain Manager must implement to host its own data server.
 #[async_trait]
 pub trait DataProvider: Send + Sync {
@@ -221,7 +230,7 @@ impl<P: DataProvider + 'static> DataServer<P> {
                                         }
                                     }
                                     LoxiMessage::DiscoverAuthority { domain_id: auction_id } => {
-                                        // Legacy / Open Discovery
+                                        // Open Discovery (Public Rooms)
                                         self.active_rooms
                                             .lock()
                                             .await
@@ -232,7 +241,6 @@ impl<P: DataProvider + 'static> DataServer<P> {
                                         if let Some(payload_str) =
                                             self.provider.get_payload(&auction_id).await
                                         {
-                                            // Wrap in loxi_types::Problem for agnostic transport
                                             let agnostic = loxi_types::Problem {
                                                 auction_id: auction_id.clone(),
                                                 domain_id: self.domain_id.clone(),
@@ -242,14 +250,6 @@ impl<P: DataProvider + 'static> DataServer<P> {
                                                 .send(WsMessage::Text(serde_json::to_string(
                                                     &agnostic,
                                                 )?))
-                                                .await;
-                                        } else {
-                                            let error_msg = serde_json::json!({
-                                                "error": format!("Payload for ID {} not found", auction_id),
-                                                "auction_id": auction_id
-                                            });
-                                            let _ = tx
-                                                .send(WsMessage::Text(error_msg.to_string()))
                                                 .await;
                                         }
                                     }
@@ -282,19 +282,14 @@ impl<P: DataProvider + 'static> DataServer<P> {
                                             let _ = orchestrator_tx.send(out_msg).await;
                                         }
                                     }
-                                    _ => {
-                                        println!("❔ [ArchitectSDK] Message not handled in Data Plane: {:?}", loxi_msg);
-                                    }
+                                    _ => {}
                                 },
-                                Err(e) => {
-                                    println!("⚠️ [ArchitectSDK] Failed to parse LoxiMessage: {}\nContent Preview: {}", e, &text[..std::cmp::min(100, text.len())]);
-                                }
+                                Err(_) => {}
                             }
                         }
                     }
                 }
-                Err(e) => {
-                    println!("❌ [ArchitectSDK] Socket Read Error: {}", e);
+                Err(_) => {
                     break;
                 }
             }
