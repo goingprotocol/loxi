@@ -34,68 +34,107 @@ self.onmessage = async (e) => {
 
         // 3. Process Payload & HYDRATE (If needed)
         const raw = typeof payload === 'string' ? JSON.parse(payload) : payload;
-        self.postMessage({ status: 2, message: `Normalizing payload for mission: ${raw.mission_id || "unknown"}` });
+        const missionId = raw.mission_id || (raw.solution && raw.solution.mission_id) || "unknown";
 
-        const stopsToMap = raw.stops || (raw.problem && raw.problem.stops) || [];
+        console.log(`👷 [Visualizer] Normalizing payload for mission: ${missionId}`, {
+            hasSolution: !!raw.solution,
+            hasStops: !!raw.stops,
+            hasProblem: !!raw.problem,
+            keys: Object.keys(raw)
+        });
+
+        // Robust stop mapping: Look everywhere for stops array
+        const stopsToMap = raw.stops || (raw.problem && raw.problem.stops) || (raw.solution && raw.solution.stops) || [];
         const stopMap = new Map();
-        stopsToMap.forEach(s => stopMap.set(s.id, s));
+        stopsToMap.forEach(s => {
+            if (s && s.id !== undefined) {
+                stopMap.set(String(s.id), s);
+            }
+        });
+
+        console.log(`👷 [Visualizer] stopMap built with ${stopMap.size} entries.`);
 
         // Helper to hydrate a route (array of IDs or stop objects)
-        const hydrateRoute = (routeData, missionId) => {
-            // Support 'route' (Legacy/Direct) or 'stops' (Consolidated Mission)
-            const routeArray = Array.isArray(routeData) ? routeData : (routeData.route || routeData.stops || []);
+        const hydrateRoute = (routeData, mId) => {
+            if (!routeData) return null;
+
+            // Support 'all_stops' (New), 'route' (Legacy), or 'stops' (Consolidated Mission) or direct array
+            let routeArray = [];
+            if (Array.isArray(routeData)) {
+                routeArray = routeData;
+            } else {
+                routeArray = routeData.tours || routeData.routes || routeData.all_stops || routeData.route || routeData.stops || [];
+            }
+
+            // If it's a nested structure (like tours), we might need to flatten or handle differently
+            // but usually this is called per tour.
+            if (Array.isArray(routeArray[0]) && routeArray.length > 0) {
+                console.warn("👷 [Visualizer] hydrateRoute received nested arrays, picking first one or flattening?");
+                // If we get nested arrays here, it's because we passed the whole solution instead of a single tour
+            }
 
             const routeStops = routeArray.map(id => {
-                const stopId = typeof id === 'string' ? id : (id.id || id.stop_id);
+                const stopId = typeof id === 'object' ? String(id.id || id.stop_id) : String(id);
 
                 // 1. Try from stops map
                 let stop = stopMap.get(stopId);
 
-                // 2. Try special "start" location from problem or root
+                // 2. Try special "start" location
                 if (!stop && stopId === "start") {
                     const startLoc = raw.problem?.vehicle?.start_location || raw.vehicle?.start_location || raw.start_location;
                     if (startLoc) stop = { location: startLoc };
                 }
 
-                // 3. If it's already an object with location (hydrated), use it.
-                if (!stop && typeof id === 'object' && id.location) return { id: stopId, location: id.location };
-
-                if (!stop) return null;
+                if (!stop) {
+                    console.warn(`👷 [Visualizer] Missing coordinates for stop ID: ${stopId}`);
+                    return null;
+                }
                 return { id: stopId, location: stop.location };
             }).filter(Boolean);
 
             return {
-                id: routeData.id || missionId || "route_1",
+                id: routeData.id || mId || "route_1",
                 stops: routeStops
             };
         };
 
-        // Data format normalization: We MUST end up with a { routes: [ {id, stops: [{id, location}]} ] }
-        if (raw.routes && Array.isArray(raw.routes)) {
-            self.postMessage({ status: 2, message: 'Processing multi-route payload...' });
-            input = { routes: raw.routes.map(r => hydrateRoute(r, raw.mission_id)) };
+        // Normalize to: { routes: [ {id, stops: [{id, location}]} ] }
+        if (raw.tours && Array.isArray(raw.tours)) {
+            input = { routes: raw.tours.map((t, i) => hydrateRoute(t, `${missionId}_${i}`)) };
         } else if (raw.solution) {
-            self.postMessage({ status: 2, message: 'Processing single-solution payload...' });
-            // solution can have .routes or .route
-            if (raw.solution.routes && Array.isArray(raw.solution.routes)) {
-                input = { routes: raw.solution.routes.map(r => hydrateRoute(r, raw.mission_id)) };
+            const sol = raw.solution;
+            if (sol.tours && Array.isArray(sol.tours)) {
+                input = { routes: sol.tours.map((t, i) => hydrateRoute(t, `${missionId}_${i}`)) };
+            } else if (sol.all_stops && Array.isArray(sol.all_stops)) {
+                input = { routes: [hydrateRoute(sol.all_stops, missionId)] };
             } else {
-                input = { routes: [hydrateRoute(raw.solution, raw.mission_id)] };
+                // Compatibility Fallbacks
+                const legacyRoutes = sol.routes || sol.route;
+                if (legacyRoutes) {
+                    if (Array.isArray(legacyRoutes[0])) {
+                        input = { routes: legacyRoutes.map((t, i) => hydrateRoute(t, `${missionId}_${i}`)) };
+                    } else {
+                        input = { routes: [hydrateRoute(legacyRoutes, missionId)] };
+                    }
+                } else {
+                    input = { routes: [] };
+                }
             }
-        } else if (raw.route && Array.isArray(raw.route)) {
-            self.postMessage({ status: 2, message: 'Processing legacy route payload...' });
-            input = { routes: [hydrateRoute(raw.route, raw.mission_id)] };
+        } else if (raw.all_stops && Array.isArray(raw.all_stops)) {
+            input = { routes: [hydrateRoute(raw.all_stops, missionId)] };
+        } else if (raw.routes && Array.isArray(raw.routes)) {
+            input = { routes: raw.routes.map((t, i) => hydrateRoute(t, `${missionId}_${i}`)) };
         } else {
-            // Last ditch effort: if it's an array, treat it as a single route
-            if (Array.isArray(raw)) {
-                input = { routes: [hydrateRoute(raw, "mission_1")] };
-            } else {
-                input = { routes: [] };
-            }
+            console.error("👷 [Visualizer] Unrecognized payload structure", raw);
+            input = { routes: [] };
         }
 
-        if (!input.routes || input.routes.length === 0 || input.routes[0].stops.length === 0) {
-            console.error("Payload normalization failed. Raw keys:", Object.keys(raw));
+        if (!input.routes || input.routes.length === 0 || input.routes.every(r => r.stops.length === 0)) {
+            console.error("Payload normalization failed. Data inspection:", {
+                inputRoutesLen: input.routes?.length,
+                firstRouteStopsLen: input.routes?.[0]?.stops?.length,
+                rawKeys: Object.keys(raw)
+            });
             throw new Error(`Normalization failed: No valid routes found. Data keys: ${Object.keys(raw).join(', ')}`);
         }
 

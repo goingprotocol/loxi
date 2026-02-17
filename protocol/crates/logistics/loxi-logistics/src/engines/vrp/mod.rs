@@ -219,7 +219,7 @@ impl VrpSolver {
         _original_problem: &LoxiProblem,
         sol: pragmatic_solution::Solution,
     ) -> Result<LoxiSolution, String> {
-        let mut routes = Vec::new();
+        let mut tours = Vec::new();
         let mut all_stops = Vec::new();
 
         for tour in &sol.tours {
@@ -233,7 +233,7 @@ impl VrpSolver {
                 }
             }
             if !tour_stops.is_empty() {
-                routes.push(tour_stops);
+                tours.push(tour_stops);
             }
         }
 
@@ -247,7 +247,7 @@ impl VrpSolver {
         let metadata = SolutionMetadata::new("vrp-rs-pragmatic", 0);
 
         let mut loxi_sol = LoxiSolution::new(all_stops, cost, metadata);
-        loxi_sol.routes = Some(routes);
+        loxi_sol.tours = Some(tours);
         loxi_sol.unassigned_jobs = unassigned_jobs;
 
         Ok(loxi_sol)

@@ -1302,8 +1302,8 @@ impl LogisticsArchitect {
             return Vec::new();
         }
 
-        let mut combined_routes = Vec::new();
-        let mut combined_routes_list = Vec::new();
+        let mut combined_all_stops = Vec::new();
+        let mut combined_tours = Vec::new();
         let mut combined_stops = Vec::new();
         let mut combined_cost = 0.0;
         let mut completed_count = 0;
@@ -1317,8 +1317,16 @@ impl LogisticsArchitect {
                         let sub = sub_ref.value();
                         if let Some(ref sol) = sub.solution {
                             completed_count += 1;
-                            combined_routes.extend(sol.route.clone());
-                            combined_routes_list.push(sol.route.clone());
+                            combined_all_stops.extend(sol.all_stops.clone());
+                            
+                            // 🔑 CRITICAL: Aggregate tours correctly
+                            if let Some(ref sub_tours) = sol.tours {
+                                combined_tours.extend(sub_tours.clone());
+                            } else {
+                                // Fallback for simple/leaf tasks
+                                combined_tours.push(sol.all_stops.clone());
+                            }
+                            
                             combined_stops.extend(sub.stops.clone());
                             combined_cost += sol.cost;
                         }
@@ -1328,8 +1336,14 @@ impl LogisticsArchitect {
                 total_count = 1;
                 if let Some(ref sol) = root.solution {
                     completed_count = 1;
-                    combined_routes.extend(sol.route.clone());
-                    combined_routes_list.push(sol.route.clone());
+                    combined_all_stops.extend(sol.all_stops.clone());
+                    
+                    if let Some(ref sub_tours) = sol.tours {
+                        combined_tours.extend(sub_tours.clone());
+                    } else {
+                        combined_tours.push(sol.all_stops.clone());
+                    }
+                    
                     combined_stops.extend(root.stops.clone());
                     combined_cost += sol.cost;
                 }
@@ -1337,14 +1351,14 @@ impl LogisticsArchitect {
         }
 
         println!("📊 Mission {}: {}/{} tasks completed. Combined {} paths.", 
-            mission_id, completed_count, total_count, combined_routes_list.len());
+            mission_id, completed_count, total_count, combined_tours.len());
 
         if completed_count == total_count && total_count > 0 {
             println!("🎉 Mission {} FULLY COMPLETED!", mission_id);
             
             let final_solution = types::Solution {
-                route: combined_routes,
-                routes: Some(combined_routes_list),
+                all_stops: combined_all_stops,
+                tours: Some(combined_tours),
                 cost: combined_cost,
                 unassigned_jobs: Vec::new(),
                 cost_breakdown: Default::default(),

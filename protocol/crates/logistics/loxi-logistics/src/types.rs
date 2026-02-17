@@ -354,9 +354,9 @@ impl SolutionMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Solution {
     #[serde(default)]
-    pub route: Vec<String>,
+    pub all_stops: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub routes: Option<Vec<Vec<String>>>,
+    pub tours: Option<Vec<Vec<String>>>,
     #[serde(default)]
     pub unassigned_jobs: Vec<String>,
     #[serde(default)]
@@ -372,10 +372,10 @@ pub struct Solution {
 }
 
 impl Solution {
-    pub fn new(route: Vec<String>, cost: f64, metadata: SolutionMetadata) -> Self {
+    pub fn new(all_stops: Vec<String>, cost: f64, metadata: SolutionMetadata) -> Self {
         Self {
-            route,
-            routes: None,
+            all_stops,
+            tours: None,
             unassigned_jobs: Vec::new(),
             cost,
             cost_breakdown: CostBreakdown::default(),
@@ -386,7 +386,7 @@ impl Solution {
     }
 
     pub fn num_stops(&self) -> usize {
-        self.route.len()
+        self.all_stops.len()
     }
 }
 
