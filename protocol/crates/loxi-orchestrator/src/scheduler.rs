@@ -135,34 +135,59 @@ impl Scheduler {
     ) -> Option<(Assignment, String, String, Vec<String>, Vec<(String, String)>)> {
         // We cannot just pop_front() because the head of the queue might be a Specialized task
         // while the freed/new worker is General (Generic). Blind popping causes mismatches.
-        let match_idx = self.task_queue.iter().position(|(_id, req, _poster)| {
+
+        // PASS 1: Prefer Affinity Match (Optimization)
+        let affinity_match_idx = self.task_queue.iter().position(|(_id, req, _poster)| {
             let ram_ok = specs.ram_mb >= req.min_ram_mb;
             let cpu_ok = specs.thread_count >= req.min_cpu_threads;
             let gpu_ok = !req.use_gpu || specs.is_webgpu_enabled;
 
-            // Strict Affinity: If task needs affinity, worker MUST have it.
-            let affinity_ok = if req.affinities.is_empty() {
-                true
-            } else {
-                req.affinities.iter().any(|a| specs.affinity_hashes.contains(a))
-            };
+            let has_affinity = !req.affinities.is_empty()
+                && req.affinities.iter().any(|a| specs.affinity_hashes.contains(a));
 
-            ram_ok && cpu_ok && gpu_ok && affinity_ok
+            ram_ok && cpu_ok && gpu_ok && has_affinity
         });
 
-        if let Some(idx) = match_idx {
-            // Match found! Extract specifically that task.
-            let (task_id, req, posted_by) = self.task_queue.remove(idx).unwrap();
+        if let Some(idx) = affinity_match_idx {
+            return self.extract_task(idx, specs, "Affinity Match");
+        }
 
-            println!("⚡ Scheduler: Piping pending task {} to worker {}", task_id, specs.id);
-            let affinities = req.affinities.clone();
-            let metadata = req.metadata.clone();
-            let assignment = Assignment { node_id: specs.id.clone(), task_type: req.task_type };
-            self.busy_nodes.insert(specs.id.clone(), assignment.clone());
-            return Some((assignment, task_id, posted_by, affinities, metadata));
+        // PASS 2: Fallback to Hardware Match (Dynamic Loading)
+        let generic_match_idx = self.task_queue.iter().position(|(_id, req, _poster)| {
+            let ram_ok = specs.ram_mb >= req.min_ram_mb;
+            let cpu_ok = specs.thread_count >= req.min_cpu_threads;
+            let gpu_ok = !req.use_gpu || specs.is_webgpu_enabled;
+
+            // We accept any task here as long as hardware fits.
+            // Affinity miss implies dynamic loading will happen.
+            ram_ok && cpu_ok && gpu_ok
+        });
+
+        if let Some(idx) = generic_match_idx {
+            return self.extract_task(idx, specs, "Hardware Match (Dynamic Load)");
         }
 
         None
+    }
+
+    fn extract_task(
+        &mut self,
+        idx: usize,
+        specs: &NodeSpecs,
+        reason: &str,
+    ) -> Option<(Assignment, String, String, Vec<String>, Vec<(String, String)>)> {
+        // Match found! Extract specifically that task.
+        let (task_id, req, posted_by) = self.task_queue.remove(idx).unwrap();
+
+        println!(
+            "⚡ Scheduler: Piping pending task {} to worker {} [{}]",
+            task_id, specs.id, reason
+        );
+        let affinities = req.affinities.clone();
+        let metadata = req.metadata.clone();
+        let assignment = Assignment { node_id: specs.id.clone(), task_type: req.task_type };
+        self.busy_nodes.insert(specs.id.clone(), assignment.clone());
+        Some((assignment, task_id, posted_by, affinities, metadata))
     }
 
     /// For V1 massive scale, we assume homogeneous or "Smart Popping".
@@ -235,8 +260,8 @@ impl Scheduler {
                 if !affinity_hit && !req.affinities.is_empty() {
                     // Debug why it failed
                     println!(
-                        "❌ Node {} rejected. Task needs {:?} but Node has {:?}",
-                        n.id, req.affinities, n.affinity_hashes
+                        "ℹ️ Node {} skipped for affinity cache (Needs {:?}).",
+                        n.id, req.affinities
                     );
                 }
 

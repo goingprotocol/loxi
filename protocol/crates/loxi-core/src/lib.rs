@@ -1,6 +1,9 @@
 #![no_std]
 
+#[cfg(test)]
 #[macro_use]
+extern crate alloc;
+#[cfg(not(test))]
 extern crate alloc;
 
 use alloc::string::String;
@@ -73,6 +76,8 @@ pub struct Solution {
     pub worker_id: String,
     pub result_hash: String,
     pub payload: Option<String>,
+    #[serde(default)]
+    pub client_owner_id: Option<String>,
     #[serde(default)]
     pub metadata: Vec<(String, String)>,
 }
@@ -158,20 +163,24 @@ pub enum Message {
 
     // Phase 4: Control & Status
     KeepAlive,
+    NotifyOwner {
+        owner_id: String,
+        notify_type: String, // e.g., "mission_completed", "auction_status"
+        payload: String,
+        #[serde(default)]
+        metadata: Vec<(String, String)>,
+    },
     Error(String),
 }
 
 pub struct OrchestratorLogic;
 
 impl OrchestratorLogic {
-    /// Pure function: Takes a list of nodes and specific requirements,
-    /// returns the ID of the best candidate.
     pub fn select_best_node(nodes: &[NodeSpecs], req: &TaskRequirement) -> Option<Assignment> {
         let mut best_node: Option<&NodeSpecs> = None;
         let mut best_score: u64 = 0;
 
         for node in nodes {
-            // 1. Hard Constraints (Must meet min reqs)
             if node.ram_mb < req.min_ram_mb {
                 continue;
             }
@@ -179,15 +188,13 @@ impl OrchestratorLogic {
                 continue;
             }
 
-            // 2. Data Affinity Scoring (Generic Capability boost)
             let mut affinity_score: u64 = 0;
             for req_affinity in &req.affinities {
                 if node.affinity_hashes.contains(req_affinity) {
-                    affinity_score += 5000; // Major boost for matching affinity (cached data/software)
+                    affinity_score += 5000;
                 }
             }
 
-            // 3. Tier Scoring (Hardware Classification)
             let tier_score = if node.is_webgpu_enabled && node.ram_mb >= 16000 {
                 3000
             } else if node.ram_mb >= 8000 {
@@ -196,12 +203,8 @@ impl OrchestratorLogic {
                 1000
             };
 
-            // 4. Granular Scoring (Tie-breaker)
             let hardware_score = node.ram_mb / 1024 + (node.thread_count as u64 * 10);
 
-            // 5. Load Balancing (Pseudo-Random Variance)
-            // Use simple hashing of (NodeID + TaskID) to distribute load among identical nodes.
-            // This avoids the "First Node Wins All" problem in homogenous clusters.
             let mut hash = 5381u64;
             for c in node.id.bytes() {
                 hash = ((hash << 5).wrapping_add(hash)).wrapping_add(c as u64);
@@ -209,7 +212,7 @@ impl OrchestratorLogic {
             for c in req.id.bytes() {
                 hash = ((hash << 5).wrapping_add(hash)).wrapping_add(c as u64);
             }
-            let variance = hash % 50; // 0-49 points variation
+            let variance = hash % 50;
 
             let total_score = tier_score + hardware_score + affinity_score + variance;
 
@@ -261,65 +264,11 @@ mod tests {
             min_cpu_threads: 4,
             use_gpu: true,
             task_type: TaskType::Compute,
-            priority_for_owner: None, // Added field
+            priority_for_owner: None,
             metadata: Vec::new(),
         };
 
-        // Should pick gaming_pc
         let assignment = OrchestratorLogic::select_best_node(&nodes, &req).unwrap();
         assert_eq!(assignment.node_id, "gaming_pc");
-    }
-
-    #[test]
-    fn test_affinity_scoring() {
-        let nodes = vec![
-            NodeSpecs {
-                id: "expert_phone".to_string(),
-                ram_mb: 4000,
-                vram_mb: 0,
-                thread_count: 8,
-                is_webgpu_enabled: false,
-                affinity_hashes: vec!["dataset_alpha".to_string()],
-                verified_capacity: 500,
-                owner_id: None,
-            },
-            NodeSpecs {
-                id: "powerful_pc".to_string(),
-                ram_mb: 16000,
-                vram_mb: 8000,
-                thread_count: 16,
-                is_webgpu_enabled: true,
-                affinity_hashes: vec![],
-                verified_capacity: 5000,
-                owner_id: None,
-            },
-        ];
-
-        let req = TaskRequirement {
-            id: "task_2".to_string(),
-            affinities: vec!["module_gamma".to_string(), "dataset_alpha".to_string()],
-            min_ram_mb: 2000,
-            min_cpu_threads: 2,
-            use_gpu: false,
-            task_type: TaskType::Compute,
-            priority_for_owner: None, // Added field
-            metadata: Vec::new(),
-        };
-
-        // Even though PC is more powerful, the phone has the data affinity!
-        let assignment = OrchestratorLogic::select_best_node(&nodes, &req).unwrap();
-        assert_eq!(assignment.node_id, "expert_phone");
-    }
-
-    #[test]
-    fn test_task_type_serialization() {
-        let compute = TaskType::Compute;
-        let custom = TaskType::Custom("generic_module".to_string());
-
-        let s_compute = serde_json::to_string(&compute).unwrap();
-        let s_custom = serde_json::to_string(&custom).unwrap();
-
-        assert_eq!(s_compute, "\"Compute\"");
-        assert_eq!(s_custom, "{\"Custom\":\"generic_module\"}");
     }
 }

@@ -19,13 +19,15 @@ interface LeafletMapProps {
         start_location: Location;
         end_location?: Location;
     };
-    shape?: string; // Encoded polyline from Valhalla
+    shapes?: string[]; // Encoded polylines from Valhalla
     stopAssignments?: Record<string, string>; // { stop_id: color }
 }
 
 const COLORS = ['#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#06b6d4'];
 
-const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle, shape, stopAssignments }) => {
+const fromE6 = (val: number) => (Math.abs(val) > 180 ? val / 1000000 : val);
+
+const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle, shapes, stopAssignments }) => {
     const mapContainerRef = useRef<HTMLDivElement>(null);
     const mapInstance = useRef<L.Map | null>(null);
     const markersLayer = useRef<L.LayerGroup | null>(null);
@@ -125,20 +127,24 @@ const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle, shape, 
 
         const bounds = L.latLngBounds([]);
 
-        // A. Render Raw Encoded Polyline (Valhalla Shape)
-        if (shape) {
-            const decoded = decodePolyline(shape, 6);
-            if (decoded.length > 0) {
-                const polyline = L.polyline(decoded as L.LatLngExpression[], {
-                    color: '#8b5cf6', // Strong Violet
-                    weight: 6,
-                    opacity: 0.9,
-                    lineJoin: 'round'
-                });
-                polylineLayer.current.addLayer(polyline);
-
-                decoded.forEach(pt => bounds.extend(pt as L.LatLngExpression));
-            }
+        // A. Render Street-Level Polylines (Valhalla Shapes)
+        if (shapes && shapes.length > 0) {
+            console.log(`🗺️ [LeafletMap] Rendering ${shapes.length} street-level shapes...`);
+            shapes.forEach((shapeStr, idx) => {
+                const decoded = decodePolyline(shapeStr, 6);
+                if (decoded.length > 0) {
+                    const polyline = L.polyline(decoded as L.LatLngExpression[], {
+                        color: COLORS[idx % COLORS.length],
+                        weight: 6,
+                        opacity: 0.9,
+                        lineJoin: 'round'
+                    });
+                    polylineLayer.current?.addLayer(polyline);
+                    decoded.forEach(pt => bounds.extend(pt as L.LatLngExpression));
+                } else {
+                    console.warn(`🗺️ [LeafletMap] Failed to decode shape ${idx} (Length: ${shapeStr.length})`);
+                }
+            });
         }
 
         if (stops && stops.length > 0) {
@@ -148,7 +154,10 @@ const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle, shape, 
             stops.forEach((stop) => {
                 if (!stop.location) return;
                 const assignmentColor = stopAssignments?.[stop.id];
-                const marker = L.circleMarker([stop.location.lat, stop.location.lon], {
+                const lat = fromE6(stop.location.lat);
+                const lon = fromE6(stop.location.lon);
+
+                const marker = L.circleMarker([lat, lon], {
                     radius: 7,
                     fillColor: assignmentColor || '#3b82f6',
                     color: assignmentColor ? '#ffffff' : '#ffffff',
@@ -159,18 +168,18 @@ const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle, shape, 
                 }).bindTooltip(stop.id, { permanent: false, direction: 'top' });
 
                 markersLayer.current?.addLayer(marker);
-                bounds.extend([stop.location.lat, stop.location.lon]);
+                bounds.extend([lat, lon]);
             });
 
-            // Add Polylines (VRP Route IDs)
-            if (routes && routes.length > 0) {
+            // Add Polylines (VRP Route IDs) - ONLY IF SHAPES ARE NOT PRESENT
+            if (routes && routes.length > 0 && (!shapes || shapes.length === 0)) {
                 routes.forEach((route, index) => {
                     if (route.length < 2) return;
 
                     const pathCoords: L.LatLngExpression[] = route
                         .map(id => stopMap.get(id))
                         .filter(s => !!s && s.location)
-                        .map(s => [s!.location.lat, s!.location.lon] as L.LatLngExpression);
+                        .map(s => [fromE6(s!.location.lat), fromE6(s!.location.lon)] as L.LatLngExpression);
 
                     if (pathCoords.length > 1) {
                         const polyline = L.polyline(pathCoords, {
@@ -182,12 +191,17 @@ const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle, shape, 
                         polylineLayer.current?.addLayer(polyline);
                     }
                 });
+            } else if (routes && routes.length > 0) {
+                console.log("🗺️ [LeafletMap] Skipping VRP straight lines because shapes are present.");
             }
         }
 
         // Add Vehicle Depot Markers (Differentiating Start/End)
         if (vehicle) {
-            const startMarker = L.circleMarker([vehicle.start_location.lat, vehicle.start_location.lon], {
+            const startLat = fromE6(vehicle.start_location.lat);
+            const startLon = fromE6(vehicle.start_location.lon);
+
+            const startMarker = L.circleMarker([startLat, startLon], {
                 radius: 10,
                 fillColor: '#10b981', // Emerald Green for Start
                 color: '#ffffff',
@@ -197,10 +211,13 @@ const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle, shape, 
             }).bindTooltip("DEPOT (START)", { permanent: true, direction: 'bottom' });
 
             markersLayer.current?.addLayer(startMarker);
-            bounds.extend([vehicle.start_location.lat, vehicle.start_location.lon]);
+            bounds.extend([startLat, startLon]);
 
             if (vehicle.end_location) {
-                const endMarker = L.circleMarker([vehicle.end_location.lat, vehicle.end_location.lon], {
+                const endLat = fromE6(vehicle.end_location.lat);
+                const endLon = fromE6(vehicle.end_location.lon);
+
+                const endMarker = L.circleMarker([endLat, endLon], {
                     radius: 10,
                     fillColor: '#ef4444', // Red for End
                     color: '#ffffff',
@@ -210,7 +227,7 @@ const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle, shape, 
                 }).bindTooltip("DEPOT (END)", { permanent: true, direction: 'top' });
 
                 markersLayer.current?.addLayer(endMarker);
-                bounds.extend([vehicle.end_location.lat, vehicle.end_location.lon]);
+                bounds.extend([endLat, endLon]);
             }
         }
 
@@ -221,7 +238,7 @@ const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle, shape, 
             });
         }
 
-    }, [stops, routes, vehicle, shape, stopAssignments]);
+    }, [stops, routes, vehicle, shapes, stopAssignments]);
 
     return (
         <div

@@ -379,7 +379,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0dc92fb57ca44df6db8059111ab3af99a63d5d0f8375d9972e319a379c6bab76"
 dependencies = [
  "generic-array",
- "rand_core",
+ "rand_core 0.6.4",
  "subtle",
  "zeroize",
 ]
@@ -419,6 +419,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "dashmap"
+version = "5.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "978747c1d849a7d2ee5e8adc0159961c48fb7e5db2f06af6723b80123bb53856"
+dependencies = [
+ "cfg-if",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
+ "serde",
 ]
 
 [[package]]
@@ -549,7 +563,7 @@ dependencies = [
  "hkdf",
  "pem-rfc7468",
  "pkcs8",
- "rand_core",
+ "rand_core 0.6.4",
  "sec1",
  "subtle",
  "zeroize",
@@ -592,7 +606,7 @@ version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0b50bfb653653f9ca9095b427bed08ab8d75a137839d9ad64eb11810d5b6393"
 dependencies = [
- "rand_core",
+ "rand_core 0.6.4",
  "subtle",
 ]
 
@@ -747,7 +761,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0f9ef7462f7c099f518d754361858f86d8a07af53ba9af0fe635bbccb151a63"
 dependencies = [
  "ff",
- "rand_core",
+ "rand_core 0.6.4",
  "subtle",
 ]
 
@@ -1119,7 +1133,7 @@ dependencies = [
  "p256",
  "p384",
  "pem",
- "rand",
+ "rand 0.8.5",
  "rsa",
  "serde",
  "serde_json",
@@ -1201,6 +1215,7 @@ name = "loxi-architect-sdk"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "dashmap 6.1.0",
  "futures-util",
  "jsonwebtoken",
  "loxi-core",
@@ -1218,8 +1233,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "dashmap 5.5.3",
+ "loxi-logistics",
+ "loxi-orchestrator",
  "loxi-types",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -1227,7 +1246,7 @@ name = "loxi-compute"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
- "rand",
+ "rand 0.8.5",
  "rayon",
  "wasm-bindgen",
  "wasm-bindgen-rayon",
@@ -1247,19 +1266,20 @@ name = "loxi-logistics"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "cc",
  "console_error_panic_hook",
+ "dashmap 5.5.3",
  "dotenv",
  "futures-util",
  "getrandom 0.2.17",
  "h3o",
+ "js-sys",
  "lazy_static",
  "loxi-architect-sdk",
  "loxi-core",
  "loxi-types",
  "loxi-wasm-sdk",
  "lru",
- "rand",
+ "rand 0.8.5",
  "reqwest",
  "serde",
  "serde-wasm-bindgen",
@@ -1271,7 +1291,23 @@ dependencies = [
  "vrp-pragmatic",
  "warp",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wasm-bindgen-test",
+ "web-sys",
+]
+
+[[package]]
+name = "loxi-matrix"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "console_error_panic_hook",
+ "loxi-logistics",
+ "loxi-wasm-sdk",
+ "serde",
+ "serde-wasm-bindgen",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 
@@ -1280,7 +1316,7 @@ name = "loxi-orchestrator"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "dashmap",
+ "dashmap 6.1.0",
  "dotenv",
  "futures-util",
  "jsonwebtoken",
@@ -1292,31 +1328,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "loxi-partition-artifact"
-version = "0.1.0"
-dependencies = [
- "console_error_panic_hook",
- "getrandom 0.2.17",
- "h3o",
- "loxi-logistics",
- "loxi-wasm-sdk",
- "serde",
- "serde_json",
- "uuid",
- "wasm-bindgen",
-]
-
-[[package]]
-name = "loxi-sector-artifact"
+name = "loxi-partitioner"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "loxi-logistics",
- "loxi-types",
  "loxi-wasm-sdk",
  "serde",
- "serde_json",
+ "serde-wasm-bindgen",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]
@@ -1330,7 +1351,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "loxi-valhalla-artifact"
+name = "loxi-vrp"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
@@ -1338,24 +1359,8 @@ dependencies = [
  "loxi-wasm-sdk",
  "serde",
  "serde-wasm-bindgen",
- "serde_json",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "loxi-vrp-artifact"
-version = "0.1.0"
-dependencies = [
- "console_error_panic_hook",
- "js-sys",
- "loxi-types",
- "loxi-wasm-sdk",
- "serde",
- "serde_json",
- "vrp-core",
- "vrp-pragmatic",
- "wasm-bindgen",
- "web-sys",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]
@@ -1368,6 +1373,8 @@ dependencies = [
  "serde_json",
  "sha2",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -1493,7 +1500,7 @@ dependencies = [
  "num-integer",
  "num-iter",
  "num-traits",
- "rand",
+ "rand 0.8.5",
  "smallvec",
  "zeroize",
 ]
@@ -1807,8 +1814,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
 dependencies = [
  "libc",
- "rand_chacha",
- "rand_core",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6db2770f06117d490610c7488547d543617b21bfa07796d7a12f6f1bd53850d1"
+dependencies = [
+ "rand_chacha 0.9.0",
+ "rand_core 0.9.5",
 ]
 
 [[package]]
@@ -1818,7 +1835,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
 dependencies = [
  "ppv-lite86",
- "rand_core",
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand_chacha"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.9.5",
 ]
 
 [[package]]
@@ -1831,13 +1858,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_core"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
+dependencies = [
+ "getrandom 0.3.4",
+]
+
+[[package]]
 name = "rand_distr"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32cb0b9bc82b0a0876c2dd994a7e7a2683d3e7390ca40e6886785ef0c7e3ee31"
 dependencies = [
  "num-traits",
- "rand",
+ "rand 0.8.5",
 ]
 
 [[package]]
@@ -1930,7 +1966,7 @@ dependencies = [
  "getrandom 0.2.17",
  "js-sys",
  "num_cpus",
- "rand",
+ "rand 0.8.5",
  "rand_distr",
  "rayon",
  "rustc-hash",
@@ -1949,7 +1985,7 @@ dependencies = [
  "num-traits",
  "pkcs1",
  "pkcs8",
- "rand_core",
+ "rand_core 0.6.4",
  "signature",
  "spki",
  "subtle",
@@ -2189,7 +2225,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 dependencies = [
  "digest",
- "rand_core",
+ "rand_core 0.6.4",
 ]
 
 [[package]]
@@ -2556,7 +2592,7 @@ dependencies = [
  "http 0.2.12",
  "httparse",
  "log",
- "rand",
+ "rand 0.8.5",
  "sha1",
  "thiserror 1.0.69",
  "url",
@@ -2575,7 +2611,7 @@ dependencies = [
  "http 1.4.0",
  "httparse",
  "log",
- "rand",
+ "rand 0.8.5",
  "sha1",
  "thiserror 1.0.69",
  "url",
@@ -2653,6 +2689,7 @@ checksum = "ee48d38b119b0cd71fe4141b30f5ba9c7c5d9f4e7a3a8b4a674e4b6ef789976f"
 dependencies = [
  "getrandom 0.3.4",
  "js-sys",
+ "rand 0.9.2",
  "wasm-bindgen",
 ]
 
@@ -2677,7 +2714,7 @@ dependencies = [
  "lazy_static",
  "nohash-hasher",
  "paste",
- "rand",
+ "rand 0.8.5",
  "rayon",
  "rosomaxa",
  "rustc-hash",
@@ -2691,7 +2728,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8cb7db1bfafb109ac3e07533f59452dfcdca77805e48ccaa03221815476003ee"
 dependencies = [
  "paste",
- "rand",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "time",

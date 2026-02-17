@@ -7,15 +7,17 @@ pub trait LoxiArtifact {
     type Problem: for<'de> Deserialize<'de>;
     type Solution: Serialize;
 
-    /// Solve the given problem.
-    fn solve(problem: &Self::Problem) -> Result<Self::Solution, String>;
+    /// Solve the given problem. (WASM artifacts often need async/await for IO/Wait)
+    fn solve(
+        problem: &Self::Problem,
+    ) -> impl std::future::Future<Output = Result<Self::Solution, String>>;
 
     /// (Optional) Refine an existing solution.
     fn refine(
         _problem: &Self::Problem,
         _previous_solution: &Self::Solution,
-    ) -> Result<Self::Solution, String> {
-        Err("Refinement not implemented for this artifact".to_string())
+    ) -> impl std::future::Future<Output = Result<Self::Solution, String>> {
+        async { Err("Refinement not implemented for this artifact".to_string()) }
     }
 
     /// (Optional) Get the cost of a solution.
@@ -31,7 +33,7 @@ pub struct ArtifactResponse {
 
 /// Standardized wrapper to handle the WASM boundary.
 /// This ensures deterministic hashing and uniform response structure.
-pub fn loxi_worker_wrapper<T: LoxiArtifact>(problem_json: &str) -> Result<String, JsValue> {
+pub async fn loxi_worker_wrapper<T: LoxiArtifact>(problem_json: &str) -> Result<String, JsValue> {
     // 1. Initialize diagnostics
     console_error_panic_hook::set_once();
 
@@ -41,6 +43,7 @@ pub fn loxi_worker_wrapper<T: LoxiArtifact>(problem_json: &str) -> Result<String
 
     // 3. Execute solver
     let solution = T::solve(&problem)
+        .await
         .map_err(|e| JsValue::from_str(&format!("Solver execution failed: {}", e)))?;
 
     // 4. Extract cost

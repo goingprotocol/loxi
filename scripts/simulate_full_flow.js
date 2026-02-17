@@ -27,7 +27,7 @@ async function runDemo() {
                 auction_id: "matrix_auction_valhalla_01",
                 requirement: {
                     id: "matrix_auction_valhalla_01",
-                    artifact_hash: "loxi_valhalla_v1",
+                    artifact_hash: "loxi_matrix",
                     context_hashes: ["H3_BUE_7"],
                     min_ram_mb: 8000,
                     use_gpu: false,

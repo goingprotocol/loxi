@@ -1,0 +1,52 @@
+[package]
+name = "loxi-logistics"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+default = ["vrp", "matrix", "partition"]
+vrp = []
+matrix = ["include_wasm"]
+partition = []
+include_wasm = []
+
+[dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde-wasm-bindgen = "0.5"
+serde_json = "1.0"
+dashmap = { version = "5.5", features = ["serde"] }
+js-sys = "0.3"
+loxi-core = { path = "../../loxi-core" }
+loxi-types = { path = "../../loxi-types" }
+
+vrp-pragmatic = { version = "1.18", default-features = false } # Core solver
+h3o = "0.3"
+rand = "0.8"
+async-trait = "0.1"
+lazy_static = "1.4"
+lru = "0.12"
+getrandom = { version = "0.2", features = ["js"] } # Essential for Rand + WASM
+loxi-wasm-sdk = { path = "../../loxi-wasm-sdk" }
+console_error_panic_hook = "0.1"
+web-sys = { version = "0.3", features = ["console"] }
+uuid = { version = "1.0", features = ["v4", "fast-rng", "macro-diagnostics", "js"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+loxi-architect-sdk = { path = "../../loxi-architect-sdk" }
+tokio = { version = "1.0", features = ["full", "macros", "rt-multi-thread"] }
+tokio-tungstenite = "0.20"
+futures-util = "0.3"
+url = "2.5"
+warp = "0.3"
+reqwest = { version = "0.11", features = ["json"] }
+dotenv = "0.15.0"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

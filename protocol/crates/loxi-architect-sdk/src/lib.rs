@@ -4,7 +4,7 @@ use loxi_core::Message as LoxiMessage;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
@@ -17,7 +17,7 @@ pub mod protocol {
     }
 }
 
-/// Trait that any Domain Manager must implement to host its own data server.
+/// Trait that any Architect must implement to host its own data server.
 #[async_trait]
 pub trait DataProvider: Send + Sync {
     async fn get_payload(&self, auction_id: &str) -> Option<String>;
@@ -52,12 +52,12 @@ pub struct DataServer<P: DataProvider> {
     provider: Arc<P>,
     domain_id: String,
     // Active Room Connections: auction_id -> Vec<mpsc::Sender<WsMessage>>
-    active_rooms: Arc<Mutex<HashMap<String, Vec<mpsc::Sender<WsMessage>>>>>,
+    active_rooms: Arc<dashmap::DashMap<String, Vec<mpsc::Sender<WsMessage>>>>,
 }
 
 impl<P: DataProvider + 'static> DataServer<P> {
     pub fn new(provider: Arc<P>, domain_id: String) -> Self {
-        Self { provider, domain_id, active_rooms: Arc::new(Mutex::new(HashMap::new())) }
+        Self { provider, domain_id, active_rooms: Arc::new(dashmap::DashMap::new()) }
     }
 
     pub async fn start(
@@ -232,8 +232,6 @@ impl<P: DataProvider + 'static> DataServer<P> {
                                     LoxiMessage::DiscoverAuthority { domain_id: auction_id } => {
                                         // Open Discovery (Public Rooms)
                                         self.active_rooms
-                                            .lock()
-                                            .await
                                             .entry(auction_id.clone())
                                             .or_default()
                                             .push(tx.clone());

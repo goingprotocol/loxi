@@ -2,16 +2,17 @@
 resolver = "2"
 members = [
     "crates/loxi-types",
-    "crates/loxi-logistics",
+    "crates/logistics/loxi-logistics",
     "crates/loxi-compute",
     "crates/loxi-cli",
     "crates/loxi-core", "crates/loxi-orchestrator",
     "crates/loxi-architect-sdk",
-    "crates/loxi-logistics/artifacts/vrp",
-    "crates/loxi-logistics/artifacts/partitioner",
-    "crates/loxi-logistics/artifacts/matrix",
-    "crates/loxi-logistics/artifacts/sector",
+
+
     "crates/loxi-wasm-sdk",
+    "crates/logistics/loxi-vrp",
+    "crates/logistics/loxi-matrix",
+    "crates/logistics/loxi-partitioner",
 ]
 
 [workspace.package]

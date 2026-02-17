@@ -5,9 +5,24 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
+    host: true,
+    proxy: {
+      '/logistics': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/claim-task': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/workers': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+      '/get-solution': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      }
+    }
   },
 })

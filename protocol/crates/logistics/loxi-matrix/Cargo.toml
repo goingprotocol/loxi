@@ -1,0 +1,24 @@
+[package]
+name = "loxi-matrix"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+loxi-logistics = { path = "../loxi-logistics" }
+loxi-wasm-sdk = { path = "../../loxi-wasm-sdk" }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde-wasm-bindgen = "0.5"
+console_error_panic_hook = "0.1"
+[dependencies.web-sys]
+version = "0.3"
+features = ["console"]
+
+[build-dependencies]
+cc = "1.0"
