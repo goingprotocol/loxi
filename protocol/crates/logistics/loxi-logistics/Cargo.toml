@@ -29,6 +29,8 @@ loxi-types = { path = "../../loxi-types" }
 vrp-pragmatic = { version = "1.18", default-features = false } # Core solver
 h3o = "0.3"
 rand = "0.8"
+aes-gcm = "0.10"
+anyhow = "1.0"
 async-trait = "0.1"
 lazy_static = "1.4"
 lru = "0.12"

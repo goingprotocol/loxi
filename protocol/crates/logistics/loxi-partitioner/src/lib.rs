@@ -1,4 +1,4 @@
-use loxi_logistics::{PartitionResponse, PartitionerArtifact};
+use loxi_logistics::PartitionerArtifact;
 use loxi_wasm_sdk::loxi_worker_wrapper;
 use wasm_bindgen::prelude::*;
 

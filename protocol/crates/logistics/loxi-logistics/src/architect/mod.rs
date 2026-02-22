@@ -1,6 +1,7 @@
 pub mod auction;
 mod core;
 pub mod partitioner;
+pub mod storage;
 // pub mod types; // Moved to crate root
 use crate::types;
 use crate::types::TaskRole;
@@ -61,7 +62,7 @@ impl LogisticsArchitect {
         orchestrator_url: &str,
         shared_cache: Arc<dashmap::DashMap<String, types::Problem>>,
     ) -> Self {
-        let mut slf = Self {
+        let slf = Self {
             domain_id: "logistics".to_string(),
             orchestrator_url: orchestrator_url.to_string(),
             auction_manager: auction::ArchitectAuction::new(),

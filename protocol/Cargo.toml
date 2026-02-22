@@ -10,9 +10,13 @@ members = [
 
 
     "crates/loxi-wasm-sdk",
+    "crates/net/loxi-net-core",
+    "crates/net/loxi-net-wasm",
+    "crates/net/loxi-asset-manager",
     "crates/logistics/loxi-vrp",
     "crates/logistics/loxi-matrix",
     "crates/logistics/loxi-partitioner",
+    "crates/ai/loxi-ai", "crates/net/loxi-net-core", "crates/net/loxi-net-wasm", "crates/net/loxi-asset-manager",
 ]
 
 [workspace.package]

@@ -26,8 +26,15 @@ ctx.onmessage = async (e) => {
         }
 
         // 3. Execute
-        ctx.postMessage({ status: 2, message: 'Solving optimization routes...' });
-        const solution = await wasmModule.run(payload, ctx);
+        let solution;
+        if (payload instanceof ArrayBuffer || payload instanceof Uint8Array) {
+            ctx.postMessage({ status: 2, message: 'Solving optimization routes (Zero-Copy Binary)...' });
+            const uint8_payload = payload instanceof ArrayBuffer ? new Uint8Array(payload) : payload;
+            solution = await wasmModule.run_binary(uint8_payload, ctx);
+        } else {
+            ctx.postMessage({ status: 2, message: 'Solving optimization routes (JSON Legacy)...' });
+            solution = await wasmModule.run(payload, ctx);
+        }
 
         const duration = ((performance.now() - start) / 1000).toFixed(2);
         ctx.postMessage({ status: 2, message: `VRP solved in ${duration}s.` });

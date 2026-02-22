@@ -63,3 +63,45 @@ pub async fn loxi_worker_wrapper<T: LoxiArtifact>(problem_json: &str) -> Result<
 
     Ok(serde_json::to_string(&response).unwrap())
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct ArtifactResponseBinary {
+    pub payload: Vec<u8>,
+    pub hash: String,
+    pub cost: f64,
+}
+
+/// Zero-Copy binary wrapper for the WASM boundary.
+/// Ingests native bincode slices directly from the Orchestrator, completely avoiding JSON serialization.
+pub async fn loxi_worker_wrapper_binary<T: LoxiArtifact>(
+    problem_bytes: &[u8],
+) -> Result<Vec<u8>, JsValue> {
+    console_error_panic_hook::set_once();
+
+    // 1. Parse binary input
+    let problem: T::Problem = bincode::deserialize(problem_bytes)
+        .map_err(|e| JsValue::from_str(&format!("Failed to parse binary problem: {}", e)))?;
+
+    // 2. Execute solver
+    let solution = T::solve(&problem)
+        .await
+        .map_err(|e| JsValue::from_str(&format!("Solver execution failed: {}", e)))?;
+
+    // 3. Extract cost
+    let cost = T::get_cost(&solution);
+
+    // 4. Serialize solution to native binary
+    let solution_bytes = bincode::serialize(&solution)
+        .map_err(|e| JsValue::from_str(&format!("Failed to serialize binary solution: {}", e)))?;
+
+    // 5. Generate deterministic hash
+    let mut hasher = Sha256::new();
+    hasher.update(&solution_bytes);
+    let result_hash = format!("{:x}", hasher.finalize());
+
+    // 6. Wrap in binary response structure
+    let response = ArtifactResponseBinary { payload: solution_bytes, hash: result_hash, cost };
+
+    bincode::serialize(&response)
+        .map_err(|e| JsValue::from_str(&format!("Failed to pack final binary response: {}", e)))
+}

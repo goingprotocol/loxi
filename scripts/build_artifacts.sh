@@ -73,11 +73,18 @@ echo "📦 Deploying Solution Visualizer Worker..."
 mkdir -p "$DIST_DIR/assets/pkg/loxi_solution_visualizer"
 cp "$TEMPLATES_DIR/solution_visualizer_worker.js" "$DIST_DIR/assets/pkg/loxi_solution_visualizer/worker.js"
 
+# 5. Build Loxi Asset Manager (The Zero-JS Rust Bootstrap)
+echo "📦 Building loxi-asset-manager..."
+mkdir -p "$DIST_DIR/assets/pkg/asset_manager"
+pushd "$PROTOCOL_DIR/crates/net/loxi-asset-manager" > /dev/null
+wasm-pack build --target web --out-dir ../../../../$DIST_DIR/assets/pkg/asset_manager --no-typescript
+popd > /dev/null
+
 # Link Tiles (Direct route)
 TILES_SRC="$CRATES_DIR/loxi-logistics/data/valhalla_tiles"
 echo "🔗 Linking valhalla_tiles to dist/tiles..."
 # Use absolute path for target to avoid relative link breaks
-ln -snf "$(realpath $TILES_SRC)" "$DIST_DIR/tiles"
+ln -snf "$(pwd)/$TILES_SRC" "$DIST_DIR/tiles"
 
 echo "✅ Artifacts built successfully in ./$DIST_DIR"
 echo "👉 Run 'cargo run -- node --dist ./$DIST_DIR' to serve."
