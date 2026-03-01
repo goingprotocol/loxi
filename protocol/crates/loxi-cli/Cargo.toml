@@ -1,0 +1,22 @@
+[package]
+name = "loxi-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Command-line interface for Loxi routing solver"
+
+[[bin]]
+name = "loxi"
+path = "src/main.rs"
+
+[dependencies]
+loxi-types = { path = "../loxi-types" }
+loxi-logistics = { path = "../logistics/loxi-logistics" }
+loxi-orchestrator = { path = "../loxi-orchestrator" }
+tokio = { version = "1.0", features = ["full"] }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+dashmap = { version = "5.5", features = ["serde"] }
+

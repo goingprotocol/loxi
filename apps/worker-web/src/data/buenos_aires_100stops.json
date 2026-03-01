@@ -1,0 +1,824 @@
+{
+  "id": "mission_buenos_aires_100",
+  "mission_id": "test_100_stops",
+  "config": {
+    "workflow_id": "standard_vrp_flow",
+    "partitioner_hash": "loxi_partitioner",
+    "matrix_artifact_hash": "loxi_matrix",
+    "solver_artifact_hash": "loxi_vrp"
+  },
+  "vehicle": {
+    "capacity": 500,
+    "start_location": {
+      "lat": -34.582365,
+      "lon": -58.552911
+    },
+    "end_location": {
+      "lat": -34.582365,
+      "lon": -58.552911
+    },
+    "profile": "auto"
+  },
+  "stops": [
+    {
+      "id": "Stop_1",
+      "location": {
+        "lat": -34.582365,
+        "lon": -58.552911
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_2",
+      "location": {
+        "lat": -34.582450,
+        "lon": -58.553010
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_3",
+      "location": {
+        "lat": -34.582550,
+        "lon": -58.553110
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_4",
+      "location": {
+        "lat": -34.582650,
+        "lon": -58.553210
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_5",
+      "location": {
+        "lat": -34.582750,
+        "lon": -58.553310
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_6",
+      "location": {
+        "lat": -34.582850,
+        "lon": -58.553410
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_7",
+      "location": {
+        "lat": -34.582950,
+        "lon": -58.553510
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_8",
+      "location": {
+        "lat": -34.583050,
+        "lon": -58.553610
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_9",
+      "location": {
+        "lat": -34.583150,
+        "lon": -58.553710
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_10",
+      "location": {
+        "lat": -34.583250,
+        "lon": -58.553810
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_11",
+      "location": {
+        "lat": -34.583350,
+        "lon": -58.553910
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_12",
+      "location": {
+        "lat": -34.583450,
+        "lon": -58.554010
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_13",
+      "location": {
+        "lat": -34.583550,
+        "lon": -58.554110
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_14",
+      "location": {
+        "lat": -34.583650,
+        "lon": -58.554210
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_15",
+      "location": {
+        "lat": -34.583750,
+        "lon": -58.554310
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_16",
+      "location": {
+        "lat": -34.583850,
+        "lon": -58.554410
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_17",
+      "location": {
+        "lat": -34.583950,
+        "lon": -58.554510
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_18",
+      "location": {
+        "lat": -34.584050,
+        "lon": -58.554610
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_19",
+      "location": {
+        "lat": -34.584150,
+        "lon": -58.554710
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_20",
+      "location": {
+        "lat": -34.584250,
+        "lon": -58.554810
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_21",
+      "location": {
+        "lat": -34.584350,
+        "lon": -58.554910
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_22",
+      "location": {
+        "lat": -34.584450,
+        "lon": -58.555010
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_23",
+      "location": {
+        "lat": -34.584550,
+        "lon": -58.555110
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_24",
+      "location": {
+        "lat": -34.584650,
+        "lon": -58.555210
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_25",
+      "location": {
+        "lat": -34.584750,
+        "lon": -58.555310
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_26",
+      "location": {
+        "lat": -34.584850,
+        "lon": -58.555410
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_27",
+      "location": {
+        "lat": -34.584950,
+        "lon": -58.555510
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_28",
+      "location": {
+        "lat": -34.585050,
+        "lon": -58.555610
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_29",
+      "location": {
+        "lat": -34.585150,
+        "lon": -58.555710
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_30",
+      "location": {
+        "lat": -34.585250,
+        "lon": -58.555810
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_31",
+      "location": {
+        "lat": -34.585350,
+        "lon": -58.555910
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_32",
+      "location": {
+        "lat": -34.585450,
+        "lon": -58.556010
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_33",
+      "location": {
+        "lat": -34.585550,
+        "lon": -58.556110
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_34",
+      "location": {
+        "lat": -34.585650,
+        "lon": -58.556210
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_35",
+      "location": {
+        "lat": -34.585750,
+        "lon": -58.556310
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_36",
+      "location": {
+        "lat": -34.585850,
+        "lon": -58.556410
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_37",
+      "location": {
+        "lat": -34.585950,
+        "lon": -58.556510
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_38",
+      "location": {
+        "lat": -34.586050,
+        "lon": -58.556610
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_39",
+      "location": {
+        "lat": -34.586150,
+        "lon": -58.556710
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_40",
+      "location": {
+        "lat": -34.586250,
+        "lon": -58.556810
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_41",
+      "location": {
+        "lat": -34.586350,
+        "lon": -58.556910
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_42",
+      "location": {
+        "lat": -34.586450,
+        "lon": -58.557010
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_43",
+      "location": {
+        "lat": -34.586550,
+        "lon": -58.557110
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_44",
+      "location": {
+        "lat": -34.586650,
+        "lon": -58.557210
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_45",
+      "location": {
+        "lat": -34.586750,
+        "lon": -58.557310
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_46",
+      "location": {
+        "lat": -34.586850,
+        "lon": -58.557410
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_47",
+      "location": {
+        "lat": -34.586950,
+        "lon": -58.557510
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_48",
+      "location": {
+        "lat": -34.587050,
+        "lon": -58.557610
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_49",
+      "location": {
+        "lat": -34.587150,
+        "lon": -58.557710
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_50",
+      "location": {
+        "lat": -34.587250,
+        "lon": -58.557810
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_51",
+      "location": {
+        "lat": -34.587350,
+        "lon": -58.557910
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_52",
+      "location": {
+        "lat": -34.587450,
+        "lon": -58.558010
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_53",
+      "location": {
+        "lat": -34.587550,
+        "lon": -58.558110
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_54",
+      "location": {
+        "lat": -34.587650,
+        "lon": -58.558210
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_55",
+      "location": {
+        "lat": -34.587750,
+        "lon": -58.558310
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_56",
+      "location": {
+        "lat": -34.587850,
+        "lon": -58.558410
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_57",
+      "location": {
+        "lat": -34.587950,
+        "lon": -58.558510
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_58",
+      "location": {
+        "lat": -34.588050,
+        "lon": -58.558610
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_59",
+      "location": {
+        "lat": -34.588150,
+        "lon": -58.558710
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_60",
+      "location": {
+        "lat": -34.588250,
+        "lon": -58.558810
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_61",
+      "location": {
+        "lat": -34.588350,
+        "lon": -58.558910
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_62",
+      "location": {
+        "lat": -34.588450,
+        "lon": -58.559010
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_63",
+      "location": {
+        "lat": -34.588550,
+        "lon": -58.559110
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_64",
+      "location": {
+        "lat": -34.588650,
+        "lon": -58.559210
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_65",
+      "location": {
+        "lat": -34.588750,
+        "lon": -58.559310
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_66",
+      "location": {
+        "lat": -34.588850,
+        "lon": -58.559410
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_67",
+      "location": {
+        "lat": -34.588950,
+        "lon": -58.559510
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_68",
+      "location": {
+        "lat": -34.589050,
+        "lon": -58.559610
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_69",
+      "location": {
+        "lat": -34.589150,
+        "lon": -58.559710
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_70",
+      "location": {
+        "lat": -34.589250,
+        "lon": -58.559810
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_71",
+      "location": {
+        "lat": -34.589350,
+        "lon": -58.559910
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_72",
+      "location": {
+        "lat": -34.589450,
+        "lon": -58.560010
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_73",
+      "location": {
+        "lat": -34.589550,
+        "lon": -58.560110
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_74",
+      "location": {
+        "lat": -34.589650,
+        "lon": -58.560210
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_75",
+      "location": {
+        "lat": -34.589750,
+        "lon": -58.560310
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_76",
+      "location": {
+        "lat": -34.589850,
+        "lon": -58.560410
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_77",
+      "location": {
+        "lat": -34.589950,
+        "lon": -58.560510
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_78",
+      "location": {
+        "lat": -34.590050,
+        "lon": -58.560610
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_79",
+      "location": {
+        "lat": -34.590150,
+        "lon": -58.560710
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_80",
+      "location": {
+        "lat": -34.590250,
+        "lon": -58.560810
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_81",
+      "location": {
+        "lat": -34.590350,
+        "lon": -58.560910
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_82",
+      "location": {
+        "lat": -34.590450,
+        "lon": -58.561010
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_83",
+      "location": {
+        "lat": -34.590550,
+        "lon": -58.561110
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_84",
+      "location": {
+        "lat": -34.590650,
+        "lon": -58.561210
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_85",
+      "location": {
+        "lat": -34.590750,
+        "lon": -58.561310
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_86",
+      "location": {
+        "lat": -34.590850,
+        "lon": -58.561410
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_87",
+      "location": {
+        "lat": -34.590950,
+        "lon": -58.561510
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_88",
+      "location": {
+        "lat": -34.591050,
+        "lon": -58.561610
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_89",
+      "location": {
+        "lat": -34.591150,
+        "lon": -58.561710
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_90",
+      "location": {
+        "lat": -34.591250,
+        "lon": -58.561810
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_91",
+      "location": {
+        "lat": -34.591350,
+        "lon": -58.561910
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_92",
+      "location": {
+        "lat": -34.591450,
+        "lon": -58.562010
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_93",
+      "location": {
+        "lat": -34.591550,
+        "lon": -58.562110
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_94",
+      "location": {
+        "lat": -34.591650,
+        "lon": -58.562210
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_95",
+      "location": {
+        "lat": -34.591750,
+        "lon": -58.562310
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_96",
+      "location": {
+        "lat": -34.591850,
+        "lon": -58.562410
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_97",
+      "location": {
+        "lat": -34.591950,
+        "lon": -58.562510
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_98",
+      "location": {
+        "lat": -34.592050,
+        "lon": -58.562610
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_99",
+      "location": {
+        "lat": -34.592150,
+        "lon": -58.562710
+      },
+      "demand": 1
+    },
+    {
+      "id": "Stop_100",
+      "location": {
+        "lat": -34.592250,
+        "lon": -58.562810
+      },
+      "demand": 1
+    }
+  ]
+}
