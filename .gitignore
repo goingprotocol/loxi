@@ -27,9 +27,15 @@ dist/
 .next/
 .turbo/
 
-# Environment & Logs
+# Environment & Secrets — never commit real credentials
 .env
 .env.local
+**/.env
+**/.env.local
+*.pem
+*.key
+*_private.pem
+env_orchestrator.txt
 *.log
 protocol/*.txt
 
