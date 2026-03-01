@@ -63,6 +63,7 @@ export type WorkerEvent =
     | { type: 'TASK_COMPLETED', auction_id: string, duration: number }
     | { type: 'TASK_ERROR', auction_id: string, error: string }
     | { type: 'OWNER_NOTIFICATION', notify_type: string, payload: string, metadata: [string, string][] }
+    | { type: 'SIGNAL', from_id: string, payload: string }
     | { type: 'LOG', message: string, level: 'info' | 'success' | 'error' | 'action' };
 
 /**
@@ -94,6 +95,7 @@ export type LoxiMessage =
             metadata: [string, string][]
         }
     }
+    | { Signal: { from_id: string, target_id: string, payload: string } }
     | { KeepAlive: {} }
     | { Error: string };
 
@@ -237,6 +239,22 @@ export class LoxiWorkerDevice {
             this.addLog(`📢 Notification Received: ${notify_type}`, "info");
             this.emit({ type: 'OWNER_NOTIFICATION', notify_type, payload, metadata });
         }
+
+        if (msg.Signal) {
+            const { from_id, payload } = msg.Signal;
+            this.emit({ type: 'SIGNAL', from_id, payload });
+        }
+    }
+
+    /**
+     * Send an opaque signaling message to another node via the orchestrator.
+     * Use this to exchange WebRTC SDP offers/answers and ICE candidates.
+     */
+    public sendSignal(targetId: string, payload: string) {
+        if (!this.specs?.id) throw new Error("Node not registered");
+        this.ws?.send(JSON.stringify({
+            Signal: { from_id: this.specs.id, target_id: targetId, payload }
+        }));
     }
 
     private async executeAgnosticTask(lease: WorkerLease) {
