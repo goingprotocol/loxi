@@ -115,7 +115,8 @@ impl LogisticsArchitect {
         // LogisticsArchitect itself is protected by a Mutex (async one for the loop)
         // We use std::sync::Mutex to match the shared cache type, even though we are in async context.
         // This blocks the thread briefly, which is acceptable for this logic.
-        let manager = Arc::new(std::sync::Mutex::new(Self::new(orchestrator_url, domain_id, shared_cache)));
+        let manager =
+            Arc::new(std::sync::Mutex::new(Self::new(orchestrator_url, domain_id, shared_cache)));
 
         // 1. REGISTER
         let reg_msg = {
