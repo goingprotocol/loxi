@@ -11,6 +11,7 @@ use url::Url;
 // For Production Releases, change these to the official Loxi Network endpoints.
 const DEFAULT_ORCHESTRATOR_URL: &str = "ws://127.0.0.1:3005"; // e.g., "wss://api.loxi.network"
 const DEFAULT_PUBLIC_URL: &str = "ws://localhost:3006"; // e.g., "wss://logistics.going.com"
+const DOMAIN_ID: &str = "logistics";
 
 #[tokio::main]
 async fn main() {
@@ -39,13 +40,13 @@ async fn main() {
 
     // 1. Initialize Internal Logistics Architect
     let shared_cache = std::sync::Arc::new(dashmap::DashMap::new());
-    let manager = LogisticsArchitect::new(&connect_addr, shared_cache);
+    let manager = LogisticsArchitect::new(&connect_addr, DOMAIN_ID, shared_cache);
     let manager_arc = std::sync::Arc::new(std::sync::Mutex::new(manager));
 
     // 2. Register as Authority with our PUBLIC DATA ADDRESS (The Sala)
     // This allows workers to discover where to download/push logs.
     let auth = DomainAuthority {
-        domain_id: "logistics".to_string(),
+        domain_id: DOMAIN_ID.to_string(),
         authority_address: std::env::var("LOXI_PUBLIC_URL")
             .unwrap_or_else(|_| DEFAULT_PUBLIC_URL.to_string()),
     };
@@ -73,7 +74,7 @@ async fn main() {
 
     // 5. Start the Direct Data Server in the background
     let provider = std::sync::Arc::new(LogisticsArchitectProvider { manager: manager_arc.clone() });
-    let data_server = DataServer::new(provider, "logistics".to_string());
+    let data_server = DataServer::new(provider, DOMAIN_ID.to_string());
     let tx_for_server = tx.clone();
 
     tokio::spawn(async move {

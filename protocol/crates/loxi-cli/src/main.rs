@@ -62,6 +62,7 @@ fn main() -> Result<()> {
                     loxi_logistics::architect::LogisticsArchitect::run_architect(
                         &orchestrator_url,
                         &authority_ws_url,
+                        "logistics",
                         job_rx,
                         protocol_rx,
                         cache_for_manager,
