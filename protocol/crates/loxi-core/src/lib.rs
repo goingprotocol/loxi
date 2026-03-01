@@ -161,6 +161,14 @@ pub enum Message {
         details: Option<String>,
     },
 
+    // P2P Signaling: opaque relay for WebRTC SDP/ICE exchange between nodes.
+    // The orchestrator forwards this to `target_id` without inspecting `payload`.
+    Signal {
+        from_id: String,
+        target_id: String,
+        payload: String, // opaque JSON: SDP offer/answer or ICE candidate
+    },
+
     // Phase 4: Control & Status
     KeepAlive,
     NotifyOwner {

@@ -505,6 +505,23 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                             }
                         });
                     }
+                    LoxiMessage::Signal { from_id, target_id, payload } => {
+                        let peers_map = peers_map.clone();
+                        tokio::spawn(async move {
+                            if let Some(tx) = peers_map.get(&target_id).map(|p| p.value().clone()) {
+                                let _ = tx
+                                    .send(WsMessage::Text(
+                                        serde_json::to_string(&LoxiMessage::Signal {
+                                            from_id,
+                                            target_id,
+                                            payload,
+                                        })
+                                        .unwrap(),
+                                    ))
+                                    .await;
+                            }
+                        });
+                    }
                     _ => {}
                 }
             } else {
