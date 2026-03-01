@@ -7,13 +7,30 @@
 # 2. Logistics Manager (Connected to local Orchestrator)
 # ==============================================================================
 
-# Ensure cargo is available
-if ! command -v cargo &> /dev/null; then
-    echo "Error: Cargo not found. Please install Rust."
+BINARY="protocol/target/release/loxi"
+PUBLIC_DIR="protocol/crates/logistics/loxi-logistics/public"
+ENV_FILE="protocol/crates/loxi-orchestrator/.env"
+
+# Load orchestrator env vars
+if [ -f "$ENV_FILE" ]; then
+    set -a
+    source "$ENV_FILE"
+    set +a
+else
+    echo "⚠️  $ENV_FILE not found. Generate keys with: bash scripts/run_node.sh --setup"
+    echo "   See: cp $ENV_FILE.example $ENV_FILE  (then fill in your RSA keys)"
     exit 1
 fi
 
-# Default to internal public directory if not specified
-PUBLIC_DIR="protocol/crates/logistics/loxi-logistics/public"
+# Fall back to cargo run if release binary isn't built yet
+if [ ! -f "$BINARY" ]; then
+    if ! command -v cargo &> /dev/null; then
+        echo "Error: no release binary and cargo not found."
+        exit 1
+    fi
+    echo "Release binary not found, building first (this may take a few minutes)..."
+    cargo build --manifest-path protocol/Cargo.toml -p loxi-cli --release
+fi
+
 echo "Starting Loxi Node. Artifacts: $PUBLIC_DIR"
-cargo run --manifest-path protocol/Cargo.toml -p loxi-cli -- node --port 3005 --dist "$PUBLIC_DIR"
+"$BINARY" node --port 3005 --dist "$PUBLIC_DIR"
