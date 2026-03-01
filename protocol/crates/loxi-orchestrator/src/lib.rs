@@ -45,6 +45,55 @@ pub async fn run_server(port: u16) {
     let key_manager: SharedKeyManager = Arc::new(KeyManager::new()); // Init Keys
     let active_auctions: ActiveAuctions = Arc::new(DashMap::new());
 
+    // [WATCHDOG] Re-queue tasks whose assigned workers stop responding.
+    // Runs every 30s; evicts workers silent for more than 120s.
+    {
+        const CHECK_INTERVAL_SECS: u64 = 30;
+        const TASK_TIMEOUT_SECS: u64 = 120;
+
+        let sched_wdog = scheduler.clone();
+        let auctions_wdog = active_auctions.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(
+                tokio::time::Duration::from_secs(CHECK_INTERVAL_SECS),
+            );
+            loop {
+                interval.tick().await;
+                let timeout = std::time::Duration::from_secs(TASK_TIMEOUT_SECS);
+                let expired = sched_wdog.lock().await.drain_expired(timeout);
+
+                for worker_id in expired {
+                    eprintln!(
+                        "⏰ Watchdog: worker {} silent for >{}s — re-queuing task",
+                        worker_id, TASK_TIMEOUT_SECS
+                    );
+
+                    // Find the auction this worker was handling
+                    let task_info = auctions_wdog
+                        .iter()
+                        .find(|e| e.value().assigned_worker_id.as_deref() == Some(&worker_id))
+                        .map(|e| {
+                            (
+                                e.key().clone(),
+                                e.value().poster_id.clone(),
+                                e.value().original_req.clone(),
+                            )
+                        });
+
+                    if let Some((task_id, poster_id, Some(req))) = task_info {
+                        // Clear the stale assignment so the task can be re-scheduled
+                        if let Some(mut meta) = auctions_wdog.get_mut(&task_id) {
+                            meta.assigned_worker_id = None;
+                        }
+                        // Re-queue; the next free/connecting worker will pick it up
+                        sched_wdog.lock().await.schedule_task(task_id.clone(), req, poster_id);
+                        eprintln!("🔄 Watchdog: task {} re-queued", task_id);
+                    }
+                }
+            }
+        });
+    }
+
     while let Ok((stream, addr)) = listener.accept().await {
         tokio::spawn(handle_connection(
             stream,

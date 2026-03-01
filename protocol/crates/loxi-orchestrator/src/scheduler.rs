@@ -1,6 +1,7 @@
 use loxi_core::{Assignment, NodeSpecs, TaskRequirement};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
+use std::time::{Duration, Instant};
 
 // --- CONFIG: Trusted Partners (Hardcoded for V1) ---
 const TRUSTED_PARTNERS: &[&str] = &[];
@@ -40,6 +41,8 @@ pub struct Scheduler {
 
     // TRACKING: Who is doing what (Busy Nodes)
     busy_nodes: HashMap<String, Assignment>,
+    // WATCHDOG: When each worker was assigned (for timeout enforcement)
+    busy_timestamps: HashMap<String, Instant>,
 }
 
 impl Scheduler {
@@ -48,6 +51,7 @@ impl Scheduler {
             idle_pool: BinaryHeap::new(),
             task_queue: VecDeque::new(),
             busy_nodes: HashMap::new(),
+            busy_timestamps: HashMap::new(),
         }
     }
 
@@ -100,6 +104,7 @@ impl Scheduler {
             // Match found!
             let assignment =
                 Assignment { node_id: worker.id.clone(), task_type: req.task_type.clone() };
+            self.busy_timestamps.insert(assignment.node_id.clone(), Instant::now());
             self.busy_nodes.insert(worker.id, assignment.clone());
             Some(assignment)
         } else {
@@ -117,6 +122,7 @@ impl Scheduler {
     ) -> Option<(Assignment, String, String, Vec<String>, Vec<(String, String)>)> {
         // 1. Mark as free (remove from busy)
         self.busy_nodes.remove(worker_id);
+        self.busy_timestamps.remove(worker_id);
 
         // 2. SMART PIPE: Scan queue for FIRST compatible task
         if let Some(match_result) = self.try_match_pending(&original_specs) {
@@ -186,6 +192,7 @@ impl Scheduler {
         let affinities = req.affinities.clone();
         let metadata = req.metadata.clone();
         let assignment = Assignment { node_id: specs.id.clone(), task_type: req.task_type };
+        self.busy_timestamps.insert(specs.id.clone(), Instant::now());
         self.busy_nodes.insert(specs.id.clone(), assignment.clone());
         Some((assignment, task_id, posted_by, affinities, metadata))
     }
@@ -321,5 +328,24 @@ impl Scheduler {
         }
 
         selected_node
+    }
+
+    /// Removes workers whose assignments have exceeded `timeout` from the busy
+    /// tracking maps and returns their IDs so the caller can re-queue their tasks.
+    /// The worker is NOT returned to the idle pool — its actual state is unknown.
+    pub fn drain_expired(&mut self, timeout: Duration) -> Vec<String> {
+        let expired: Vec<String> = self
+            .busy_timestamps
+            .iter()
+            .filter(|(_, ts)| ts.elapsed() > timeout)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        for id in &expired {
+            self.busy_nodes.remove(id);
+            self.busy_timestamps.remove(id);
+        }
+
+        expired
     }
 }
