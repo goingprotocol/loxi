@@ -300,6 +300,7 @@ export class LoxiWorkerDevice {
             console.log("DEBUG: finalPayload", finalPayload);
 
             // 2. ARTIFACT RESOLUTION & EXECUTION via WORKER
+            const taskStart = performance.now();
             const affinityArtifact = lease.affinities?.find(a => a.startsWith("loxi_")) || "unknown";
             this.addLog(`🚀 Launching Worker for: ${affinityArtifact}`, "action");
             console.log("DEBUG: archAddr", archAddr);
@@ -422,6 +423,7 @@ export class LoxiWorkerDevice {
 
             // Send COMMIT
             const missionId = lease.metadata?.find(m => m[0] === 'mission_id')?.[1];
+            const taskDuration = Math.round(performance.now() - taskStart);
 
             this.ws?.send(JSON.stringify({
                 SubmitSolution: {
@@ -431,14 +433,14 @@ export class LoxiWorkerDevice {
                     result_hash: resultHash,
                     payload: null,
                     metadata: [
-                        ["duration", "100"], // TODO: measure actual duration
+                        ["duration", String(taskDuration)],
                         ["score", "100"]
                     ]
                 }
             }));
 
             this.addLog(`🔒 Commit Sent (Hash: ${resultHash.substring(0, 8)}...)`, "success");
-            this.emit({ type: 'TASK_COMPLETED', auction_id: lease.auction_id, duration: 100 });
+            this.emit({ type: 'TASK_COMPLETED', auction_id: lease.auction_id, duration: taskDuration });
 
         } catch (err: any) {
             this.addLog(`❌ Execution Failed: ${err}`, "error");
