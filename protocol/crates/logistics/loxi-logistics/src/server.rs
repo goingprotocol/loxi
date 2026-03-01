@@ -2,6 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[cfg(not(target_arch = "wasm32"))]
 use warp::Filter;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -11,6 +14,8 @@ pub async fn start_artifact_server(
     job_tx: tokio::sync::mpsc::UnboundedSender<crate::architect::LogisticsJob>,
     protocol_tx: tokio::sync::mpsc::UnboundedSender<loxi_core::Message>,
     shared_cache: Arc<dashmap::DashMap<String, crate::types::Problem>>,
+    verify_ticket: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    node_count: Arc<AtomicUsize>,
 ) {
     let cache_filter = warp::any().map(move || shared_cache.clone());
 
@@ -99,14 +104,25 @@ pub async fn start_artifact_server(
             }))
         });
 
+    // GET /workers/count
+    let nc = node_count.clone();
+    let workers_count_route = warp::path!("workers" / "count").and(warp::get()).map(move || {
+        warp::reply::json(&serde_json::json!({
+            "count": nc.load(Ordering::Relaxed)
+        }))
+    });
+
     // WebSocket Data Plane: /logistics/data
     let protocol_tx_clone = protocol_tx.clone();
+    let vt = verify_ticket.clone();
     let log_data = warp::path!("logistics" / "data").and(warp::ws()).and(cache_filter.clone()).map(
         move |ws: warp::ws::Ws, cache: Arc<dashmap::DashMap<String, crate::types::Problem>>| {
             let protocol_tx = protocol_tx_clone.clone();
+            let verify_fn = vt.clone();
             ws.on_upgrade(move |mut websocket| {
                 let cache = cache.clone();
                 let protocol_tx = protocol_tx.clone();
+                let verify_fn = verify_fn.clone();
                 async move {
                     use futures_util::{SinkExt, StreamExt};
                     while let Some(result) = websocket.next().await {
@@ -114,6 +130,15 @@ pub async fn start_artifact_server(
                             if let Ok(text) = msg.to_str() {
                                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(text) {
                                     if let Some(claim) = json.get("ClaimTask") {
+                                        let ticket = claim["ticket"].as_str().unwrap_or_default();
+                                        if !verify_fn(ticket) {
+                                            let _ = websocket
+                                                .send(warp::ws::Message::text(
+                                                    r#"{"error":"invalid ticket"}"#,
+                                                ))
+                                                .await;
+                                            return;
+                                        }
                                         let auction_id =
                                             claim["auction_id"].as_str().unwrap_or_default();
                                         println!(
@@ -164,7 +189,8 @@ pub async fn start_artifact_server(
         },
     );
 
-    let api_routes = log_submit.or(log_solution_by_id).or(log_data).with(cors.clone());
+    let api_routes =
+        log_submit.or(log_solution_by_id).or(log_data).or(workers_count_route).with(cors.clone());
 
     let logistics_static = warp::path("logistics").and(warp::fs::dir(artifact_dir)).with(cors);
 

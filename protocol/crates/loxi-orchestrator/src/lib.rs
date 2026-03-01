@@ -1,7 +1,10 @@
 use futures_util::{SinkExt, StreamExt};
 use loxi_core::{Message as LoxiMessage, NodeSpecs, WorkerLease};
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 use tokio_tungstenite::accept_async;
@@ -22,15 +25,23 @@ type SharedScheduler = Arc<Mutex<Scheduler>>; // New Brain
 type SharedKeyManager = Arc<KeyManager>; // Security
 type ActiveAuctions = Arc<DashMap<String, AuctionMetadata>>; // Consensus & Tracking
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AuctionCompletionStatus {
+    Pending,
+    Completed,
+}
+
 pub struct AuctionMetadata {
     pub poster_id: String,
     pub consensus_hashes: Vec<String>,
     // [FAULT TOLERANCE] Persist Requirement for Re-Scheduling
     pub original_req: Option<loxi_core::TaskRequirement>,
     pub assigned_worker_id: Option<String>,
+    pub created_at: u64,
+    pub status: AuctionCompletionStatus,
 }
 
-pub async fn run_server(port: u16) {
+pub async fn run_server(port: u16, node_count: Arc<AtomicUsize>) {
     dotenv().ok(); // Load .env
 
     let addr = format!("0.0.0.0:{}", port);
@@ -60,6 +71,15 @@ pub async fn run_server(port: u16) {
                 interval.tick().await;
                 let timeout = std::time::Duration::from_secs(TASK_TIMEOUT_SECS);
                 let expired = sched_wdog.lock().await.drain_expired(timeout);
+
+                // TTL eviction for stale completed auctions
+                const AUCTION_TTL_SECS: u64 = 3600;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                auctions_wdog
+                    .retain(|_, meta| now.saturating_sub(meta.created_at) < AUCTION_TTL_SECS);
 
                 for worker_id in expired {
                     eprintln!(
@@ -102,6 +122,7 @@ pub async fn run_server(port: u16) {
             scheduler: scheduler.clone(),
             key_manager: key_manager.clone(),
             active_auctions: active_auctions.clone(),
+            node_count: node_count.clone(),
         };
         tokio::spawn(handle_connection(stream, addr, ctx));
     }
@@ -115,6 +136,7 @@ struct ConnectionCtx {
     scheduler: SharedScheduler,
     key_manager: SharedKeyManager,
     active_auctions: ActiveAuctions,
+    node_count: Arc<AtomicUsize>,
 }
 
 async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionCtx) {
@@ -126,6 +148,7 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
         scheduler,
         key_manager,
         active_auctions,
+        node_count,
     } = ctx;
     println!("Incoming connection from: {}", addr);
     let ws_stream = accept_async(stream).await.expect("Error during the websocket handshake");
@@ -175,6 +198,7 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                         // Register in Maps
                         nodes_map.insert(id.clone(), node_specs.clone());
                         peers_map.insert(id.clone(), tx.clone());
+                        node_count.fetch_add(1, Ordering::Relaxed);
 
                         // Add to Scheduler & Check for IMMEDIATE Pending Task (Queue Draining)
                         let immediate_assignment = scheduler.lock().await.add_worker(node_specs);
@@ -276,6 +300,11 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                                     consensus_hashes: Vec::new(),
                                     original_req: Some(requirement.clone()), // Save for later
                                     assigned_worker_id: None,
+                                    created_at: std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs(),
+                                    status: AuctionCompletionStatus::Pending,
                                 },
                             );
 
@@ -349,6 +378,10 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                             let mut auth_tx = None;
 
                             if let Some(mut meta) = active_auctions.get_mut(&solution.auction_id) {
+                                if meta.status == AuctionCompletionStatus::Completed {
+                                    return; // duplicate — ignore
+                                }
+                                meta.status = AuctionCompletionStatus::Completed;
                                 meta.consensus_hashes.push(solution.result_hash.clone());
                                 // Try relaying to the original poster first
                                 auth_tx = authority_peers_map
@@ -539,6 +572,7 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
         println!("❌ Node Left: {}", id);
         nodes_map.remove(&id);
         peers_map.remove(&id);
+        node_count.fetch_sub(1, Ordering::Relaxed);
 
         // [FAULT TOLERANCE] RECOVERY PROCEDURE
         // 1. Find all auctions assigned to this dead node

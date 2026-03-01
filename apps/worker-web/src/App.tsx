@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { LoxiWorkerDevice, type NodeSpecs as SDKNodeSpecs } from '../../../sdk/web/src/index';
 import './App.css'
 import LeafletMap from './components/LeafletMap';
@@ -17,6 +17,7 @@ type Log = {
 }
 
 const DEFAULT_ORCHESTRATOR = import.meta.env.VITE_ORCHESTRATOR_URL || "ws://localhost:3005";
+const ARCHITECT_BASE = import.meta.env.VITE_ARCHITECT_URL || "http://localhost:8080";
 
 function App() {
   const [url, setUrl] = useState(DEFAULT_ORCHESTRATOR)
@@ -27,6 +28,9 @@ function App() {
   const [architectProblem, setArchitectProblem] = useState<any>(null)
   const [activeSolutions, setActiveSolutions] = useState<Record<string, any>>({})
   const [currentMission, setCurrentMission] = useState<string>("")
+  const [workerCount, setWorkerCount] = useState(0)
+  const [showUpload, setShowUpload] = useState(false)
+  const [uploadText, setUploadText] = useState('')
 
   const sdkRef = useRef<LoxiWorkerDevice | null>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
@@ -34,6 +38,15 @@ function App() {
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [logs])
+
+  useEffect(() => {
+    if (!isConnected) { setWorkerCount(0); return; }
+    const id = setInterval(async () => {
+      const r = await fetch(`${ARCHITECT_BASE}/workers/count`).catch(() => null);
+      if (r?.ok) { const d = await r.json(); setWorkerCount(d.count); }
+    }, 5000);
+    return () => clearInterval(id);
+  }, [isConnected])
 
   useEffect(() => {
     const threads = navigator.hardwareConcurrency || 4;
@@ -89,6 +102,7 @@ function App() {
           addLog(ev.message, ev.level);
           break;
         case 'TASK_ERROR':
+          addLog(`⚠️ Task failed — orchestrator will retry in ~120s`, 'error');
           setStatus("IDLE");
           break;
         case 'OWNER_NOTIFICATION':
@@ -142,7 +156,7 @@ function App() {
       // Use the artifact name from metadata or default to loxi_solution_visualizer
       const metadata = Array.isArray(payload.metadata) ? payload.metadata : [];
       const artifactName = metadata.find(([k]: any) => k === 'visualizer_artifact')?.[1] || 'loxi_solution_visualizer';
-      const artifactBase = "http://localhost:8080/logistics";
+      const artifactBase = `${ARCHITECT_BASE}/logistics`;
 
       addLog(`👷 Spawning Visualizer: ${artifactName}`, "info");
 
@@ -208,6 +222,55 @@ function App() {
         }
       }
     } catch (e) { addLog(`❌ Failed to reach Conductor`, "error"); }
+  };
+
+  const parseCSV = (text: string) => {
+    const lines = text.trim().split('\n');
+    const header = lines[0].toLowerCase().split(',').map((h: string) => h.trim());
+    const latIdx = header.findIndex((h: string) => h.includes('lat'));
+    const lonIdx = header.findIndex((h: string) => h.includes('lon') || h.includes('lng'));
+    const idIdx = header.findIndex((h: string) => ['id', 'name', 'stop_id'].includes(h));
+    return lines.slice(1).map((line: string, i: number) => {
+      const cols = line.split(',').map((c: string) => c.trim());
+      const lat = parseFloat(cols[latIdx]);
+      const lon = parseFloat(cols[lonIdx]);
+      return {
+        id: idIdx >= 0 ? cols[idIdx] : `Stop_${i + 1}`,
+        location: { lat: Math.round(lat * 1_000_000), lon: Math.round(lon * 1_000_000) },
+        time_window: { start: 0, end: 86399 },
+        service_time: 300, demand: 10.0, priority: 1,
+      };
+    }).filter((s: any) => !isNaN(s.location.lat) && !isNaN(s.location.lon));
+  };
+
+  const loadUpload = () => {
+    if (!uploadText.trim()) return;
+    let stops: any[] = [];
+    try {
+      const parsed = JSON.parse(uploadText);
+      stops = Array.isArray(parsed) ? parsed : (parsed.stops || []);
+    } catch {
+      stops = parseCSV(uploadText);
+    }
+    if (stops.length === 0) { addLog('❌ No valid stops parsed', 'error'); return; }
+    const base = { lat: -34.6036, lon: -58.5408 };
+    const toE6 = (val: number) => Math.round(val * 1_000_000);
+    setActiveSolutions({});
+    setCurrentMission("");
+    setArchitectProblem({
+      stops,
+      fleet_size: Math.max(1, Math.ceil(stops.length / 30)),
+      seed: 42,
+      vehicle: {
+        id: "Vehicle_1", capacity: 150.0,
+        start_location: { lat: toE6(base.lat), lon: toE6(base.lon) },
+        shift_window: { start: 0, end: 86399 }, speed_mps: 10.0
+      },
+      client_owner_id: nodeSpecs?.owner_id
+    });
+    addLog(`📁 Loaded ${stops.length} stops from upload`, 'success');
+    setShowUpload(false);
+    setUploadText('');
   };
 
   const generateProblem = (count: number) => {
@@ -305,7 +368,55 @@ function App() {
     .filter((sol: any) => sol.mission_id === currentMission && Array.isArray(sol.routes))
     .flatMap((sol: any) => sol.routes.map((r: any) => r.shape).filter(Boolean));
 
-  console.log(`🗺️ [App] currentShapes length: ${currentShapes.length}. Sample: ${currentShapes[0]?.substring(0, 20)}...`);
+  // B3: solution metrics
+  const metrics = useMemo(() => {
+    const sol = Object.values(activeSolutions).find(
+      (s: any) => s.mission_id === currentMission) as any;
+    if (!sol?.cost_breakdown) return null;
+    return {
+      distance: (sol.cost_breakdown.distance / 1000).toFixed(1),
+      vehicles: sol.tours?.length ?? sol.routes?.length ?? 0,
+      stops: sol.stops?.length ?? 0,
+      unassigned: sol.unassigned_jobs?.length ?? 0,
+    };
+  }, [activeSolutions, currentMission]);
+
+  // C3: export solution
+  const exportSolution = (format: 'csv' | 'geojson') => {
+    const sol = Object.values(activeSolutions).find((s: any) => s.mission_id === currentMission) as any;
+    if (!sol) return;
+    const stopMap = new Map(currentStops.map((s: any) => [s.id, s]));
+    const fromE6 = (v: number) => Math.abs(v) > 180 ? v / 1_000_000 : v;
+    let content: string; let mime: string; let ext: string;
+    if (format === 'csv') {
+      const rows = ['route_id,stop_id,lat,lon,order'];
+      currentRoutes.forEach((route, ri) => {
+        route.forEach((stopId, order) => {
+          const stop = stopMap.get(stopId) as any;
+          if (stop) rows.push(`${ri + 1},${stopId},${fromE6(stop.location.lat)},${fromE6(stop.location.lon)},${order + 1}`);
+        });
+      });
+      content = rows.join('\n'); mime = 'text/csv'; ext = 'csv';
+    } else {
+      const features: any[] = [];
+      currentRoutes.forEach((route, ri) => {
+        const coords = route.map(id => stopMap.get(id) as any).filter(Boolean)
+          .map((s: any) => [fromE6(s.location.lon), fromE6(s.location.lat)]);
+        if (coords.length > 1) features.push({ type: 'Feature', properties: { route_id: ri + 1 }, geometry: { type: 'LineString', coordinates: coords } });
+        route.forEach((stopId, order) => {
+          const stop = stopMap.get(stopId) as any;
+          if (stop) features.push({ type: 'Feature', properties: { stop_id: stopId, route_id: ri + 1, order: order + 1 }, geometry: { type: 'Point', coordinates: [fromE6(stop.location.lon), fromE6(stop.location.lat)] } });
+        });
+      });
+      content = JSON.stringify({ type: 'FeatureCollection', features }, null, 2);
+      mime = 'application/geo+json'; ext = 'geojson';
+    }
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `loxi_routes_${currentMission}.${ext}`; a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="container">
@@ -316,14 +427,19 @@ function App() {
         </div>
 
         <div className="flex items-center gap-4">
+          <span style={{ color: workerCount > 0 ? '#10b981' : '#6b7280', fontSize: '0.85rem' }}>
+            ● {workerCount} worker{workerCount !== 1 ? 's' : ''}
+          </span>
           {currentMission && currentSolution && (
-            <div className="flex items-center gap-2">
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
               <button
                 onClick={() => visualizeSolution(currentMission, { solution: currentSolution, stops: currentStops, mission_id: currentMission, problem: architectProblem })}
-                style={{ background: '#8b5cf6', color: 'white', padding: '6px 14px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 'bold', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+                style={{ background: '#8b5cf6', color: 'white', padding: '6px 14px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}
               >
                 📊 RE-VISUALIZE
               </button>
+              <button onClick={() => exportSolution('csv')} style={{ background: '#1f2937', color: 'white', padding: '6px 10px', borderRadius: '4px', fontSize: '0.8rem', border: '1px solid #374151', cursor: 'pointer' }}>⬇ CSV</button>
+              <button onClick={() => exportSolution('geojson')} style={{ background: '#1f2937', color: 'white', padding: '6px 10px', borderRadius: '4px', fontSize: '0.8rem', border: '1px solid #374151', cursor: 'pointer' }}>⬇ GeoJSON</button>
             </div>
           )}
           <div className={`status-badge ${status.toLowerCase()}`}>{status}</div>
@@ -377,9 +493,40 @@ function App() {
             <div className="gen-buttons">
               <button onClick={() => generateProblem(10)}>Small</button>
               <button onClick={() => generateProblem(60)}>Medium</button>
-              <button onClick={() => generateProblem(500)} className="stress-btn">Heavy</button>
+              <button onClick={() => {
+                if (!window.confirm("500 stops requires 3+ connected workers and may take 5+ minutes. Continue?")) return;
+                generateProblem(500);
+              }} className="stress-btn">⚠ Heavy (500)</button>
             </div>
+            <button onClick={() => setShowUpload(v => !v)} style={{ fontSize: '0.8rem', padding: '4px 10px', marginTop: 6, marginBottom: 4, background: '#374151', border: 'none', color: 'white', borderRadius: 4, cursor: 'pointer' }}>
+              📁 Upload Stops
+            </button>
+            {showUpload && (
+              <div style={{ marginBottom: 8 }}>
+                <textarea
+                  value={uploadText}
+                  onChange={e => setUploadText(e.target.value)}
+                  placeholder="Paste JSON array or CSV with lat/lon columns..."
+                  rows={4}
+                  style={{ width: '100%', background: '#1e1e1e', color: 'white', border: '1px solid #374151', borderRadius: 4, padding: 6, fontSize: '0.75rem', resize: 'vertical', boxSizing: 'border-box' }}
+                />
+                <div style={{ display: 'flex', gap: 6, marginTop: 4, alignItems: 'center' }}>
+                  <input type="file" accept=".csv,.json" onChange={e => {
+                    const file = e.target.files?.[0];
+                    if (file) file.text().then(t => setUploadText(t));
+                  }} style={{ flex: 1, fontSize: '0.75rem', color: '#aaa' }} />
+                  <button onClick={loadUpload} style={{ padding: '4px 12px', background: '#8b5cf6', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: '0.8rem' }}>Load</button>
+                </div>
+              </div>
+            )}
             {currentMission && <div style={{ marginTop: 10, fontSize: '0.8em', color: '#8b5cf6' }}>Current Mission: {currentMission}</div>}
+            {metrics && (
+              <div className="spec-grid" style={{ marginTop: 8 }}>
+                <div className="spec-item"><label>Distance</label><span>{metrics.distance} km</span></div>
+                <div className="spec-item"><label>Vehicles</label><span>{metrics.vehicles}</span></div>
+                <div className="spec-item"><label>Stops</label><span>{metrics.stops} ({metrics.unassigned} unassigned)</span></div>
+              </div>
+            )}
             {completedCount > 0 && <div style={{ marginTop: 5, fontSize: '0.9em', color: '#10b981' }}>Mission Progress: {completedCount} solutions found</div>}
             <button onClick={dispatchToSwarm} className="dispatch-btn" disabled={!architectProblem || !isConnected}>DISPATCH</button>
           </section>

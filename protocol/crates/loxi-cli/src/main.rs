@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
+use std::sync::{atomic::AtomicUsize, Arc};
 
 #[derive(Parser, Debug)]
 #[command(name = "loxi")]
@@ -22,6 +23,7 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
+    dotenv::dotenv().ok(); // Load .env before creating KeyManager
     let args = Args::parse();
 
     match &args.command {
@@ -35,10 +37,17 @@ fn main() -> Result<()> {
 
                 let (job_tx, job_rx) = tokio::sync::mpsc::unbounded_channel();
                 let (protocol_tx, protocol_rx) = tokio::sync::mpsc::unbounded_channel();
-                let shared_cache = std::sync::Arc::new(dashmap::DashMap::new());
+                let shared_cache = Arc::new(dashmap::DashMap::new());
 
+                // Shared primitives for A1 (ticket verify) and B5 (worker count)
+                let node_count = Arc::new(AtomicUsize::new(0));
+                let km = Arc::new(loxi_orchestrator::auth::KeyManager::new());
+                let verify_ticket: Arc<dyn Fn(&str) -> bool + Send + Sync> =
+                    Arc::new(move |token: &str| km.verify_ticket(token).is_ok());
+
+                let nc = node_count.clone();
                 tokio::spawn(async move {
-                    loxi_orchestrator::run_server(orchestrator_port).await;
+                    loxi_orchestrator::run_server(orchestrator_port, nc).await;
                 });
 
                 let tx_clone = job_tx.clone();
@@ -50,6 +59,8 @@ fn main() -> Result<()> {
                         tx_clone,
                         protocol_tx,
                         cache_for_server,
+                        verify_ticket,
+                        node_count,
                     )
                     .await;
                 });

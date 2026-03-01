@@ -1,4 +1,4 @@
-use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use std::env;
 
@@ -64,5 +64,18 @@ impl KeyManager {
         // RS256 is the standard for Asymmetric Signing
         encode(&Header::new(Algorithm::RS256), &claims, &self.encoding_key)
             .expect("Failed to sign ticket")
+    }
+
+    pub fn verify_ticket(&self, token: &str) -> Result<TicketClaims, String> {
+        if self.public_key_pem.is_empty() {
+            return Err("No public key configured".to_string());
+        }
+        let decoding_key =
+            DecodingKey::from_rsa_pem(self.public_key_pem.as_bytes()).map_err(|e| e.to_string())?;
+        let mut validation = Validation::new(Algorithm::RS256);
+        validation.validate_aud = false; // aud carries auction_id, not a fixed audience
+        decode::<TicketClaims>(token, &decoding_key, &validation)
+            .map(|d| d.claims)
+            .map_err(|e| e.to_string())
     }
 }
