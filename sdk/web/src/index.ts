@@ -68,7 +68,7 @@ export type WorkerEvent =
 
 /**
  * Shared Type Contract (Loxi Protocol v3)
- * This SDK is AGNOSTIC. It does not know about Logistics, Finance, or AI.
+ * This SDK is AGNOSTIC. It does not know about Logistics, Finance, or any specific domain.
  * It only speaks the Loxi Message Protocol.
  */
 export type LoxiMessage =

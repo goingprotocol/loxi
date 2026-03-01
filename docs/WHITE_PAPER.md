@@ -1,61 +1,86 @@
-# LOXI: Protocolo de Orquestación y Cómputo Distribuido (Capa 2)
-## El Manifiesto del Grid Universal de Ejecución
+# Loxi: Distributed Compute Orchestration Protocol
+
+*A sovereign compute layer for routing, optimisation, and beyond.*
 
 ---
 
-## 1. Introducción: El Impuesto Computacional y la Crisis de la Centralización
-En la era actual de la economía digital, la infraestructura logística y de optimización ha caído en un estado de dependencia crítica de los servicios centralizados en la nube (SaaS). Cada cálculo de ruta, cada particionamiento geográfico y cada decisión de optimización está sujeta a lo que llamamos el **"Impuesto Logístico"**: un costo lineal por cada byte de información procesada en servidores de terceros.
+## 1. The problem with centralised compute
 
-Esta centralización no solo eleva los costos operativos, sino que introduce vulnerabilidades en la soberanía de los datos y rigidez en la innovación algorítmica. **Loxi** nace como una respuesta infraestructural a esta crisis. Loxi es un **Protocolo de Infraestructura de Cómputo** diseñado para orquestar la ejecución de tareas pesadas en una red de nodos soberanos, heterogéneos y distribuidos por todo el mundo.
+Modern logistics and optimisation software has converged on a single architectural pattern: send your data to a cloud provider, pay per API call, and hope the provider's algorithm is good enough for your problem. Every route calculation, every geographic partition, every optimisation run flows through infrastructure you don't control and can't inspect.
 
----
+We call this the **compute tax** — a linear cost imposed on every byte of data processed by a third party. It compounds with scale. A fleet operator routing 10,000 deliveries a day doesn't just pay for the compute; they also accept data sovereignty risk, algorithm opacity, and vendor lock-in as part of the deal.
 
-## 2. Definición: ¿Por qué Loxi es una Capa 2 (L2)?
-Para entender la posición de Loxi en la pila tecnológica, es necesario definir su rol como una **Capa de Abstracción de Cómputo (L2)** sobre las redes de comunicación base.
-
-Mientras que la Capa 1 de Internet se encarga del transporte de datos, Loxi actúa como la capa de inteligencia superior que añade:
-1.  **Gobernanza de Recursos**: Loxi no envía datos a ciegas; evalúa la "física" de cada nodo (capacidad de RAM, potencia de CPU, aceleración por GPU) para decidir dónde es más eficiente resolver un problema.
-2.  **Cómputo Local-First**: Al gestionar contextos de datos fragmentados (Sharding), Loxi garantiza que el algoritmo viaje hacia la data, y no la data hacia el algoritmo. Esto reduce la latencia de red y aumenta la soberanía.
-3.  **Capa de Confianza Distribuida**: Implementa mecanismos de verificación criptográfica para asegurar que los resultados devueltos por hardware ajeno sean íntegros y deterministas.
+Loxi is a response to this. It's an open compute protocol designed to orchestrate heavy tasks across a network of sovereign, heterogeneous nodes — including, critically, ordinary browser tabs.
 
 ---
 
-## 3. Filosofía Arquitectónica: El Binomio "Brain & Body"
+## 2. What Loxi is
 
-Loxi se fundamenta en una separación estricta entre la inteligencia abstracta y la ejecución física:
+Loxi sits between the application layer and the network. It doesn't move data blindly; it evaluates the hardware available at each potential execution site (RAM, CPU threads, GPU availability) and routes work to wherever it can be solved most efficiently.
 
-### 3.1. El Architect: El Diseñador de la Estrategia
-El **Architect** es el ente que posee la visión global de un problema. En la arquitectura de Loxi, el Architect es quien diseña el flujo de composición de tareas.
--   **En el Código**: Debido a que los Architects suelen gestionar dominios específicos, en la implementación física (Crates de Rust) se les conoce como **Managers** (ej: `LogisticsManager`).
--   **Función**: Un Architect define el "Blueprint" de la ejecución. No se ensucia las manos con el cálculo matemático; en su lugar, orquesta cuándo llamar a qué cartucho y cómo unir los resultados.
+Three properties define it:
 
-### 3.2. El Cartridge: La Maquinaria Inmutable (WASM)
-El **Cartridge** (Cartucho) es la unidad atómica de lógica pura. Son módulos compilados en **WebAssembly** que contienen algoritmos soberanos.
--   **Agnosticismo**: Un cartucho es indiferente al hardware; corre igual en un navegador web que en un servidor de alto rendimiento o en un dispositivo móvil.
--   **Pluggability**: Los cartuchos son intercambiables. Se pueden inyectar nuevos algoritmos a la red de forma dinámica, permitiendo que el sistema evolucione sin necesidad de reiniciar la infraestructura base del nodo.
+**Resource governance.** Before dispatching a task, the orchestrator auctions it. Workers bid with their hardware profile. The scheduler matches the task's minimum requirements against bids and assigns it to the highest-scoring available worker. No worker gets more than it can handle; no task sits waiting when capable workers are idle.
 
-### 3.3. El Worker: El Músculo de la Red
-Son los nodos (Edge Devices) que ofrecen sus ciclos de CPU a la red. El Worker recibe un Cartucho, lo ejecuta en un entorno aislado (Sandbox) y devuelve la prueba de ejecución firmada.
+**Local-first compute.** In the logistics domain, road tiles and geographic data are cached on each worker node (browser OPFS or local filesystem). The algorithm travels to the data rather than the data travelling to the algorithm. This reduces network round-trips and keeps raw location data on the worker, not a central server.
+
+**Cryptographic verification.** Every task assignment is signed with a short-lived RS256 JWT ticket. Workers must present this ticket to the data plane before receiving any payload. This prevents rogue connections from claiming tasks they weren't assigned.
 
 ---
 
-## 4. Un Caso de Uso Universal: Loxi Logistics
-Aunque Loxi es un protocolo agnóstico, su potencia se demuestra mejor a través de la logística, el primer "Vertical" implementado. Aquí, el protocolo utiliza una estrategia de **MapReduce Geográfico**:
+## 3. The three roles
 
-1.  **Fase de Particionamiento**: El Architect de Logística solicita la división de una ciudad de 10,000 paradas utilizando un **Cartucho de H3 (Uber)**.
-2.  **Cómputo de Matrices en Paralelo**: Cientos de Workers distribuidos descargan el **Cartucho Matrix (Valhalla)**. Cada nodo calcula una fracción del problema total utilizando únicamente los datos de mapas (Tiles) de su zona local.
-3.  **Resolución Distribuida**: Los resultados de las matrices se inyectan en **Cartuchos de VRP (Solver)** residentes en dispositivos móviles, resolviendo rutas locales simultáneamente.
-4.  **Consolidación Inteligente**: El Architect utiliza el sistema de notificaciones (`NotifyOwner`) para integrar las soluciones locales en una sola respuesta global soberana.
+### Architect
+
+The Architect owns the problem. It knows what needs to be solved, breaks it into subtasks appropriate for the current worker pool, dispatches those tasks to the orchestrator, and assembles the results when workers report back. For the logistics domain the Architect is implemented in `loxi-logistics`; other domains would implement their own.
+
+The Architect doesn't execute algorithms. It designs the execution plan, monitors progress via the `NotifyOwner` relay, and handles failure cases (re-queuing stalled tasks, merging partial results).
+
+### Cartridge (WASM artifact)
+
+A cartridge is a self-contained unit of logic compiled to WebAssembly. It runs identically in a browser tab, a Node.js process, or a native binary. The three cartridges in the logistics stack are:
+
+- **Matrix** — computes road-distance matrices using Valhalla tile data cached on the worker
+- **Partitioner** — divides a stop set into geographic clusters using the H3 hexagonal grid (Uber's open standard)
+- **VRP Solver** — solves the Vehicle Routing Problem on a cluster using `vrp-pragmatic`
+
+Cartridges are fetched once and cached. On subsequent tasks a worker that already has the artifact is preferred in the auction, saving a network round-trip.
+
+### Worker
+
+Workers are nodes that offer spare CPU cycles to the network. In the browser, a tab running the worker UI is a fully functional worker — it connects to the orchestrator via WebSocket, receives lease assignments, fetches cartridges if needed, executes them in a Web Worker thread, and submits the result. There is no installation step, no account, and no persistent daemon.
+
+Native workers (Node.js or compiled binary) operate the same way and are better suited for CPU-intensive tasks that benefit from multi-threading beyond what a browser tab can offer.
 
 ---
 
-## 5. El Futuro del Grid Universal
-Loxi es el cimiento para una nueva clase de aplicaciones soberanas. Al ser agnóstico, el protocolo permite que la comunidad cree cartuchos para:
--   **Inteligencia Artificial Distribuida**: Entrenamiento y ejecución de modelos en el borde.
--   **Renderizado de Gráficos**: Distribución de frames de video a través de la red.
--   **Simulaciones Científicas**: Ejecución de cálculos masivamente paralelos sin servidores centrales.
+## 4. The logistics stack in practice
 
-Loxi devuelve la soberanía computacional a las manos del arquitecto, eliminando intermediarios y transformando el hardware ocioso del mundo en un único e infinito **Grid de Ejecución**.
+When a client submits a routing problem, the Architect sizes it and builds a task pipeline:
+
+| Problem size | Pipeline |
+|---|---|
+| ≤ 12 stops | Single VRP task — one worker, direct solve |
+| 13–100 stops | Partitioner task → N parallel VRP tasks |
+| 100+ stops | Matrix task → Partitioner task → N parallel VRP tasks |
+
+Workers solve their assigned subtask and submit results back to the orchestrator, which relays them to the Architect. The Architect merges partial routes and fires a `MISSION_COMPLETED` notification to the client that submitted the original problem.
+
+If a worker goes silent mid-task, the orchestrator's watchdog detects it within 120 seconds and re-queues the task. The client eventually gets a complete solution regardless of individual worker failures.
 
 ---
-*Loxi Protocol Whitepaper v2.1 - "The Sovereign Compute Manifesto"*
+
+## 5. What comes next
+
+The Loxi protocol is domain-agnostic. The logistics stack is the first vertical, but the same orchestration layer supports any workload that can be expressed as a WASM cartridge:
+
+- **Scientific simulation** — distribute physics or financial simulations across heterogeneous hardware without a dedicated cluster. Each node receives only the slice of the state space it needs to compute, and results are merged by the Architect at the end.
+- **Video and media processing** — assign frame or segment ranges to worker nodes and aggregate the encoded output. Browser workers with hardware-accelerated WebCodecs become first-class render nodes.
+- **Financial computation** — risk models and Monte Carlo simulations are embarrassingly parallel. The auction scheduler naturally distributes independent simulation runs across available workers.
+
+The goal in each case is the same: eliminate the centralised intermediary, let the algorithm travel to the data, and give organisations sovereignty over their own compute.
+
+---
+
+*Loxi Protocol — The Sovereign Compute Manifesto*
+*Copyright © 2026 Juan Patricio Marchetto and Sergio Ariel Solis. MIT License.*

@@ -1,60 +1,77 @@
-# Protocolo de Notificaciones y Trazabilidad (Client Owner Flow)
+# Notification and Traceability Flow
 
-## Propósito
-Este documento especifica cómo Loxi garantiza que la telemetría, los estados intermedios y las soluciones finales lleguen al usuario u organización que originó la tarea, independientemente de cuántos sub-nodos o "cartridges" participen en la ejecución.
+This document explains how Loxi routes telemetry, intermediate states, and final solutions back to the client that submitted the original task — regardless of how many workers and sub-tasks were involved in solving it.
 
-## Arquitectura de Trazabilidad
+---
 
-### 1. Registro y Autoridad
-Cuando un cliente (Architect) se conecta al **Orchestrator**, se registra como una **Authority**.
-- **Mensaje**: `RegisterAuthority { domain_id, ... }`
-- **Orchestrator**: Mapea el `domain_id` a la conexión WebSocket activa.
+## The core idea
 
-### 2. Propagación del `client_owner_id`
-Toda tarea iniciada en la red lleva un sello de propiedad:
-- Al solicitar una ejecución (`RequestLease`), el `domain_id` se convierte en el `client_owner_id`.
-- Este ID se hereda de forma inmutable por cada sub-tarea generada por el `LogisticsManager` (Matrix, Partitioner, o Solver).
+Every task in the network carries an ownership stamp: the `client_owner_id`. When the Architect submits a problem it registers itself with the orchestrator as an **Authority** and tags all the subtasks it generates with its domain ID. The orchestrator uses this ID to find the right WebSocket connection when it needs to relay a result or a progress event.
 
-### 3. El Sistema de Relevo (Relay)
+Workers never need to know who the client is or where it's listening. They just submit their results to the orchestrator; the orchestrator handles the relay.
 
-Loxi utiliza una arquitectura de relevo para notificar al dueño sin que los workers necesiten conocer la dirección IP del cliente:
+---
 
-#### A. Notificación de Estados (`NotifyOwner`)
-Utilizado para logs de progreso (ej: "Calculando matriz de 500 paradas...") o eventos de finalización de misión.
-- **Flujo**: `Manager` → `Orchestrator` → `Authority (Owner)`.
-- **Estructura**:
+## Step by step
+
+### 1. Authority registration
+
+When the Architect connects to the orchestrator it sends a `RegisterAuthority` message:
+
+```rust
+LoxiMessage::RegisterAuthority { domain_id, authority_address }
+```
+
+The orchestrator stores the mapping from `domain_id` to the active WebSocket connection. Any future message addressed to that `domain_id` will be forwarded over that connection.
+
+### 2. Ownership propagation
+
+When the Architect requests a lease for a task, the orchestrator captures its `domain_id` as the `poster_id` in the auction metadata. This ID is then stamped onto every sub-task the Architect generates — Matrix, Partitioner, and VRP tasks all carry the same `client_owner_id` as the top-level mission.
+
+The ID is immutable once set. It can't be overridden by a worker or a downstream sub-task.
+
+### 3. Relay mechanisms
+
+Two message types carry information back to the owner.
+
+**`NotifyOwner`** is for progress events and mission completion signals. The Architect sends this to the orchestrator when it wants to push a status update to the client:
+
 ```rust
 LoxiMessage::NotifyOwner {
-    owner_id: String,
-    notify_type: String, // ej: "MISSION_COMPLETED"
-    payload: String,     // JSON con resultados detallados
+    owner_id: String,         // the client's domain_id
+    notify_type: String,      // e.g. "MISSION_COMPLETED"
+    payload: String,          // JSON — route data, stats, etc.
     metadata: Option<Value>,
 }
 ```
 
-#### B. Entrega de Soluciones (`SubmitSolution`)
-Utilizado cuando un Worker termina un cálculo específico.
-- **Orchestrator**: Al recibir un `SubmitSolution`, busca el `client_owner_id` en su mapa de autoridades y reenvía el mensaje instantáneamente.
-
-## Diseño de Mensajería (JSON)
-
-Para que la comunidad pueda integrar sus propios WebSockets, el formato estándar de notificación es:
+On the wire it looks like this:
 
 ```json
 {
   "NotifyOwner": {
-    "owner_id": "mi_organizacion_01",
+    "owner_id": "my_org_01",
     "notify_type": "MISSION_COMPLETED",
-    "payload": "{ \"mission_id\": \"...\", \"status\": \"completed\", \"solution\": [...] }",
+    "payload": "{\"mission_id\": \"...\", \"solution\": [...]}",
     "metadata": null
   }
 }
 ```
 
-## Beneficios del Modelo
-1.  **Privacidad**: Los Workers solo ven un ID de dueño, no su información de conexión.
-2.  **Multitenancy**: Un solo Orchestrator puede servir a múltiples organizaciones separando el tráfico por ID.
-3.  **Trazabilidad**: Permite reconstruir el árbol de ejecución de una misión compleja analizando quién fue el dueño original de cada sub-tarea.
+**`SubmitSolution`** is sent directly by workers when they finish a computation. The orchestrator looks up the `client_owner_id` in its authority map and forwards the message to the right connection immediately. It also checks whether a solution for this auction has already been delivered — if so, the duplicate is dropped silently.
 
 ---
-*Este documento refleja la implementación actual en `loxi-orchestrator` y `loxi-logistics`.*
+
+## Why this design
+
+**Privacy.** Workers learn the owner's string ID but never see its network address or connection details. They can't probe or contact the client directly.
+
+**Multi-tenancy.** A single orchestrator instance can serve many organisations simultaneously. Traffic is separated by `domain_id`; organisations never see each other's data.
+
+**Traceability.** Because every sub-task carries the original `client_owner_id`, it's possible to reconstruct the full execution tree of any mission — which workers ran which subtasks, in which order, with what results — purely from the orchestrator's logs.
+
+**Fault tolerance.** If the client reconnects (e.g. after a network hiccup), the orchestrator's authority map is updated on the next `RegisterAuthority` message. Subsequent relays go to the new connection automatically.
+
+---
+
+*Reflects the current implementation in `loxi-orchestrator/src/lib.rs` and `loxi-logistics/src/architect/mod.rs`.*
