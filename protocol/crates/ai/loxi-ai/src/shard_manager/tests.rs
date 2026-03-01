@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod tests {
+mod shard_manager_tests {
     use crate::shard_manager::*;
     use crate::PipelineStage;
 

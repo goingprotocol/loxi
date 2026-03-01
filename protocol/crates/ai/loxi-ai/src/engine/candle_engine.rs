@@ -2,6 +2,7 @@ use crate::{AiDevice, AiEngine, HiddenStateTensor, PipelineStage};
 use candle_core::Device;
 
 pub struct CandleEngine {
+    #[allow(dead_code)]
     device: Device,
     ai_device: AiDevice,
 }

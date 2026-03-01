@@ -1,6 +1,8 @@
 use crate::types::Problem;
 use serde::{Deserialize, Serialize};
 
+type MatrixResult = Result<(Vec<Vec<f64>>, Vec<Vec<u32>>), String>;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ValhallaLocation {
     pub lat: f64,
@@ -184,9 +186,7 @@ impl MatrixEngine {
         }
     }
 
-    pub fn calculate_matrices_for_problem(
-        problem: &Problem,
-    ) -> Result<(Vec<Vec<f64>>, Vec<Vec<u32>>), String> {
+    pub fn calculate_matrices_for_problem(problem: &Problem) -> MatrixResult {
         let mut locations = Vec::new();
 
         // 1. Collect all unique locations in order

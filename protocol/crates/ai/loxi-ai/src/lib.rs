@@ -15,7 +15,7 @@ pub struct PipelineStage {
 impl PipelineStage {
     /// Parsea una configuración desde un string (Formato: model_id:start-end)
     /// Ejemplo: "llama3:0-10"
-    pub fn from_str(s: &str) -> Result<Self, String> {
+    pub fn parse(s: &str) -> Result<Self, String> {
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() != 2 {
             return Err("Formato inválido. Usar 'model_id:start-end'".into());

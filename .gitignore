@@ -62,6 +62,9 @@ protocol/crates/logistics/loxi-logistics/data/valhalla_tiles/*.pbf
 protocol/crates/logistics/loxi-logistics/data/valhalla_tiles/*.osm
 !protocol/crates/logistics/loxi-logistics/data/valhalla_tiles/valhalla.json
 
+# OSM source data and Docker build artefacts (can be large)
+protocol/crates/logistics/loxi-logistics/data/valhalla_data/
+
 # Persistence & Temporary data
 **/.loxi_data.json
 reproduce_issue.sh

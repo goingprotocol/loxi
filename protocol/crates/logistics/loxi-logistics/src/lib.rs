@@ -57,17 +57,16 @@ impl LoxiArtifact for MatrixArtifact {
         let problem = problem.clone();
         async move {
             crate::engines::matrix::MatrixEngine::calculate_matrices_for_problem(&problem).map(
-                |(dist, time)| {
-                    let mut sol = Solution::default();
-                    sol.matrix = Some(
+                |(dist, time)| Solution {
+                    matrix: Some(
                         serde_json::to_value(crate::engines::matrix::ValhallaSolution {
                             sources_to_targets: dist
                                 .into_iter()
-                                .zip(time.into_iter())
+                                .zip(time)
                                 .map(|(d_row, t_row)| {
                                     d_row
                                         .into_iter()
-                                        .zip(t_row.into_iter())
+                                        .zip(t_row)
                                         .map(|(d, t)| crate::engines::matrix::RoutingCost {
                                             distance: d / 1000.0,
                                             time: t as f64,
@@ -79,8 +78,8 @@ impl LoxiArtifact for MatrixArtifact {
                                 .collect(),
                         })
                         .unwrap(),
-                    );
-                    sol
+                    ),
+                    ..Default::default()
                 },
             )
         }

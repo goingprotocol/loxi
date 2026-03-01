@@ -1,6 +1,5 @@
 pub mod opfs;
 
-use bincode;
 use js_sys::Uint8Array;
 use loxi_net_core::NetPayload;
 use wasm_bindgen::prelude::*;
@@ -8,6 +7,7 @@ use web_sys::{console, BinaryType, CloseEvent, ErrorEvent, MessageEvent, WebSock
 
 #[wasm_bindgen]
 pub struct LoxiAssetManager {
+    #[allow(dead_code)]
     ws: WebSocket,
 }
 

@@ -1,7 +1,6 @@
 use js_sys::Uint8Array;
 use loxi_net_core::{LoxiTransport, NetError, NetPayload};
-use wasm_bindgen::prelude::*;
-use web_sys::{MessageEvent, RtcDataChannel, RtcDataChannelState};
+use web_sys::{RtcDataChannel, RtcDataChannelState};
 
 /// WASM Implementation of LoxiTransport relying on WebRTC Data Channels.
 pub struct WasmWebRtcTransport {
