@@ -1282,6 +1282,7 @@ dependencies = [
  "anyhow",
  "clap",
  "dashmap 5.5.3",
+ "dotenv",
  "loxi-logistics",
  "loxi-orchestrator",
  "loxi-types",

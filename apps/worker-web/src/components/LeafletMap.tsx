@@ -10,6 +10,7 @@ interface Location {
 interface Stop {
     id: string;
     location: Location;
+    time_window?: { start: number; end: number };
 }
 
 interface LeafletMapProps {
@@ -157,6 +158,13 @@ const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle, shapes,
                 const lat = fromE6(stop.location.lat);
                 const lon = fromE6(stop.location.lon);
 
+                const formatTime = (secs: number) =>
+                    `${String(Math.floor(secs / 3600)).padStart(2, '0')}:${String(Math.floor((secs % 3600) / 60)).padStart(2, '0')}`;
+                const tw = stop.time_window;
+                const tooltipLabel = tw
+                    ? `${stop.id}\n⏰ ${formatTime(tw.start)}–${formatTime(tw.end)}`
+                    : stop.id;
+
                 const marker = L.circleMarker([lat, lon], {
                     radius: 7,
                     fillColor: assignmentColor || '#3b82f6',
@@ -165,7 +173,7 @@ const LeafletMap: React.FC<LeafletMapProps> = ({ stops, routes, vehicle, shapes,
                     opacity: 1,
                     fillOpacity: 1,
                     className: assignmentColor ? 'worker-pulse' : ''
-                }).bindTooltip(stop.id, { permanent: false, direction: 'top' });
+                }).bindTooltip(tooltipLabel, { permanent: false, direction: 'top' });
 
                 markersLayer.current?.addLayer(marker);
                 bounds.extend([lat, lon]);

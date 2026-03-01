@@ -19,4 +19,5 @@ clap = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
 dashmap = { version = "5.5", features = ["serde"] }
+dotenv = "0.15.0"
 
