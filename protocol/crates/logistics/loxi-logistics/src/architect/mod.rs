@@ -373,7 +373,7 @@ impl LogisticsArchitect {
         // 0. BYPASS: If the problem is small enough, don't partition.
         // NOTE: Disabled — VrpSolver requires a precomputed matrix; Haversine fallback removed.
         // All problems now go through the MatrixPartition → Solver pipeline.
-        if problem.stops.len() <= 0 {
+        if problem.stops.is_empty() {
             let mission_id = problem.mission_id.clone().unwrap_or(auction_id.clone());
             let mut p_copy = problem.clone();
             let task_id = auction_id.clone();
