@@ -75,10 +75,11 @@ pub struct LogisticsState {
 impl LogisticsArchitect {
     pub fn new(
         orchestrator_url: &str,
+        domain_id: &str,
         shared_cache: Arc<dashmap::DashMap<String, types::Problem>>,
     ) -> Self {
         Self {
-            domain_id: "logistics".to_string(),
+            domain_id: domain_id.to_string(),
             orchestrator_url: orchestrator_url.to_string(),
             auction_manager: auction::ArchitectAuction::new(),
             core: CoreLogistics::new(),
@@ -95,6 +96,7 @@ impl LogisticsArchitect {
     pub async fn run_architect(
         orchestrator_url: &str,
         authority_ws_url: &str,
+        domain_id: &str,
         mut job_rx: tokio::sync::mpsc::UnboundedReceiver<LogisticsJob>,
         mut protocol_rx: tokio::sync::mpsc::UnboundedReceiver<loxi_core::Message>,
         shared_cache: Arc<dashmap::DashMap<String, types::Problem>>,
@@ -113,7 +115,7 @@ impl LogisticsArchitect {
         // LogisticsArchitect itself is protected by a Mutex (async one for the loop)
         // We use std::sync::Mutex to match the shared cache type, even though we are in async context.
         // This blocks the thread briefly, which is acceptable for this logic.
-        let manager = Arc::new(std::sync::Mutex::new(Self::new(orchestrator_url, shared_cache)));
+        let manager = Arc::new(std::sync::Mutex::new(Self::new(orchestrator_url, domain_id, shared_cache)));
 
         // 1. REGISTER
         let reg_msg = {
