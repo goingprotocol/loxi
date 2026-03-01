@@ -1,3 +1,31 @@
+//! Grid Orchestrator — the central broker for the Loxi compute network.
+//!
+//! Every node in the Loxi grid connects here. The orchestrator maintains a
+//! registry of available workers, runs an auction whenever an Architect
+//! requests a lease, and relays solutions back to the right authority once
+//! a worker finishes.
+//!
+//! # Scheduling
+//!
+//! Tasks are dispatched by [`scheduler::Scheduler`], which uses a binary heap
+//! to always pick the highest-scoring available worker. Matching is three-tier:
+//! workers that already have the required WASM artifact cached are preferred,
+//! followed by workers that meet the hardware minimum, then the general queue.
+//!
+//! # Fault tolerance
+//!
+//! A background watchdog runs every 30 seconds. It evicts workers that have
+//! been silent for more than 120 seconds and re-queues their tasks. Auctions
+//! completed more than an hour ago are also pruned to keep the map bounded.
+//! On top of that, if a worker disconnects cleanly, the connection handler
+//! immediately re-schedules any task it held.
+//!
+//! # Security
+//!
+//! Lease assignments carry a short-lived RS256 JWT signed by [`auth::KeyManager`].
+//! The logistics data plane verifies this ticket before sending any payload to a
+//! connecting worker, so a worker that didn't win the auction can't claim the data.
+
 use futures_util::{SinkExt, StreamExt};
 use loxi_core::{Message as LoxiMessage, NodeSpecs, WorkerLease};
 use std::net::SocketAddr;

@@ -1,3 +1,16 @@
+//! RS256 ticket signing and verification for lease assignments.
+//!
+//! When the orchestrator assigns a task to a worker it signs a JWT with the
+//! worker's ID and the auction ID as claims. The logistics data plane calls
+//! [`KeyManager::verify_ticket`] before handing over any problem payload,
+//! ensuring only the worker that won the auction can fetch it.
+//!
+//! Keys are loaded from environment variables (`RSA_PRIVATE_KEY`,
+//! `RSA_PUBLIC_KEY`) with literal `\n` sequences replaced by real newlines —
+//! the format produced by storing a PEM in a `.env` file on one line.
+//! If `RSA_PUBLIC_KEY` is absent, signing still works but verification will
+//! always fail; a warning is printed at startup.
+
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use std::env;
