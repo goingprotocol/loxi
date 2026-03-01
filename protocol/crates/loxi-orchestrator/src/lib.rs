@@ -54,9 +54,8 @@ pub async fn run_server(port: u16) {
         let sched_wdog = scheduler.clone();
         let auctions_wdog = active_auctions.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(
-                tokio::time::Duration::from_secs(CHECK_INTERVAL_SECS),
-            );
+            let mut interval =
+                tokio::time::interval(tokio::time::Duration::from_secs(CHECK_INTERVAL_SECS));
             loop {
                 interval.tick().await;
                 let timeout = std::time::Duration::from_secs(TASK_TIMEOUT_SECS);
@@ -95,23 +94,20 @@ pub async fn run_server(port: u16) {
     }
 
     while let Ok((stream, addr)) = listener.accept().await {
-        tokio::spawn(handle_connection(
-            stream,
-            addr,
-            peers.clone(),
-            authority_peers.clone(),
-            nodes.clone(),
-            authorities.clone(),
-            scheduler.clone(),
-            key_manager.clone(),
-            active_auctions.clone(),
-        ));
+        let ctx = ConnectionCtx {
+            peers_map: peers.clone(),
+            authority_peers_map: authority_peers.clone(),
+            nodes_map: nodes.clone(),
+            authorities_map: authorities.clone(),
+            scheduler: scheduler.clone(),
+            key_manager: key_manager.clone(),
+            active_auctions: active_auctions.clone(),
+        };
+        tokio::spawn(handle_connection(stream, addr, ctx));
     }
 }
 
-async fn handle_connection(
-    stream: TcpStream,
-    addr: SocketAddr,
+struct ConnectionCtx {
     peers_map: PeerMap,
     authority_peers_map: PeerMap,
     nodes_map: NodeRegistry,
@@ -119,7 +115,18 @@ async fn handle_connection(
     scheduler: SharedScheduler,
     key_manager: SharedKeyManager,
     active_auctions: ActiveAuctions,
-) {
+}
+
+async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionCtx) {
+    let ConnectionCtx {
+        peers_map,
+        authority_peers_map,
+        nodes_map,
+        authorities_map,
+        scheduler,
+        key_manager,
+        active_auctions,
+    } = ctx;
     println!("Incoming connection from: {}", addr);
     let ws_stream = accept_async(stream).await.expect("Error during the websocket handshake");
     let (mut sink, mut stream) = ws_stream.split();
@@ -129,7 +136,7 @@ async fn handle_connection(
     // 1. WebSocket Writer Loop
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            if let Err(_) = sink.send(msg).await {
+            if sink.send(msg).await.is_err() {
                 break;
             }
         }
@@ -203,7 +210,7 @@ async fn handle_connection(
                                     worker_id: id.clone(),
                                     architect_address: architect_addr,
                                     task_type: assignment.task_type,
-                                    ticket: ticket,
+                                    ticket,
                                     affinities: next_affinities,
                                     metadata: next_metadata,
                                 };
@@ -308,7 +315,7 @@ async fn handle_connection(
                                             worker_id: assignment.node_id.clone(),
                                             architect_address: architect_addr,
                                             task_type: assignment.task_type,
-                                            ticket: ticket,
+                                            ticket,
                                             affinities: requirement.affinities.clone(),
                                             metadata: requirement.metadata.clone(),
                                         };
@@ -414,7 +421,7 @@ async fn handle_connection(
                                             worker_id: worker_id.clone(),
                                             architect_address: architect_addr,
                                             task_type: assignment.task_type,
-                                            ticket: ticket,
+                                            ticket,
                                             affinities: next_affinities,
                                             metadata: next_metadata,
                                         };

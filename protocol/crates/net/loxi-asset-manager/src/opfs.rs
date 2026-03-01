@@ -25,7 +25,7 @@ async fn ensure_dir_path(
     let mut current_dir = root.clone();
 
     for part in parts {
-        let mut options = web_sys::FileSystemGetDirectoryOptions::new();
+        let options = web_sys::FileSystemGetDirectoryOptions::new();
         options.set_create(true);
         let promise = current_dir.get_directory_handle_with_options(part, &options);
         current_dir = JsFuture::from(promise).await?.dyn_into::<FileSystemDirectoryHandle>()?;
@@ -55,7 +55,7 @@ impl LoxiOpfsManager {
             if dir_path.is_empty() { root } else { ensure_dir_path(&root, &dir_path).await? };
 
         // Get File Handle (Create if not exists)
-        let mut file_options = web_sys::FileSystemGetFileOptions::new();
+        let file_options = web_sys::FileSystemGetFileOptions::new();
         file_options.set_create(true);
         let file_promise = target_dir.get_file_handle_with_options(file_name, &file_options);
         let file_handle = JsFuture::from(file_promise).await?.dyn_into::<FileSystemFileHandle>()?;
@@ -92,7 +92,7 @@ impl LoxiOpfsManager {
             Err(_) => return Ok(false),
         };
 
-        let mut file_options = web_sys::FileSystemGetFileOptions::new();
+        let file_options = web_sys::FileSystemGetFileOptions::new();
         file_options.set_create(false);
 
         match JsFuture::from(target_dir.get_file_handle_with_options(file_name, &file_options))
@@ -115,7 +115,7 @@ impl LoxiOpfsManager {
 
         let target_dir = ensure_dir_path(&root, &dir_path).await?;
 
-        let mut file_options = web_sys::FileSystemGetFileOptions::new();
+        let file_options = web_sys::FileSystemGetFileOptions::new();
         file_options.set_create(false);
         let file_promise = target_dir.get_file_handle_with_options(file_name, &file_options);
         let file_handle = JsFuture::from(file_promise).await?.dyn_into::<FileSystemFileHandle>()?;

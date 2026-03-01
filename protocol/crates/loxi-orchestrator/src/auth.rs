@@ -17,17 +17,27 @@ pub struct KeyManager {
     pub public_key_pem: String, // To expose to Architects
 }
 
+impl Default for KeyManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KeyManager {
     pub fn new() -> Self {
-        // Load key from Env
-        let priv_pem = env::var("RSA_PRIVATE_KEY").unwrap_or_else(|_| {
-            panic!("🔥 FATAL: RSA_PRIVATE_KEY not set in .env! Run 'openssl genrsa...'");
-        });
+        // Load key from Env — replace literal \n sequences with real newlines
+        let priv_pem = env::var("RSA_PRIVATE_KEY")
+            .unwrap_or_else(|_| {
+                panic!("🔥 FATAL: RSA_PRIVATE_KEY not set in .env! Run 'openssl genrsa...'");
+            })
+            .replace("\\n", "\n");
 
-        let pub_pem = env::var("RSA_PUBLIC_KEY").unwrap_or_else(|_| {
-            println!("⚠️ RSA_PUBLIC_KEY not set. Architects won't be able to verify.");
-            "".to_string()
-        });
+        let pub_pem = env::var("RSA_PUBLIC_KEY")
+            .unwrap_or_else(|_| {
+                println!("⚠️ RSA_PUBLIC_KEY not set. Architects won't be able to verify.");
+                "".to_string()
+            })
+            .replace("\\n", "\n");
 
         if !pub_pem.is_empty() {
             println!("🔑 KeyManager: RSA Public Key ready.");

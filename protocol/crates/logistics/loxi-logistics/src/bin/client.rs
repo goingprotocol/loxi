@@ -1,7 +1,7 @@
 use futures_util::{SinkExt, StreamExt};
 use loxi_architect_sdk::DataServer;
 use loxi_core::{DomainAuthority, Message as LoxiMessage};
-use loxi_logistics::architect::{LogisticsArchitectProvider, LogisticsArchitect};
+use loxi_logistics::architect::{LogisticsArchitect, LogisticsArchitectProvider};
 use std::collections::HashMap;
 use std::path::Path;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as WsMessage};

@@ -3,6 +3,8 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
+type ScheduleResult = Option<(Assignment, String, String, Vec<String>, Vec<(String, String)>)>;
+
 // --- CONFIG: Trusted Partners (Hardcoded for V1) ---
 const TRUSTED_PARTNERS: &[&str] = &[];
 
@@ -45,6 +47,12 @@ pub struct Scheduler {
     busy_timestamps: HashMap<String, Instant>,
 }
 
+impl Default for Scheduler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Scheduler {
     pub fn new() -> Self {
         Self {
@@ -55,10 +63,7 @@ impl Scheduler {
         }
     }
 
-    pub fn add_worker(
-        &mut self,
-        specs: NodeSpecs,
-    ) -> Option<(Assignment, String, String, Vec<String>, Vec<(String, String)>)> {
+    pub fn add_worker(&mut self, specs: NodeSpecs) -> ScheduleResult {
         // [QUEUE DRAIN] First, check if this new worker can take a pending task immediately
         if let Some(match_result) = self.try_match_pending(&specs) {
             return Some(match_result);
@@ -115,11 +120,7 @@ impl Scheduler {
         }
     }
 
-    pub fn release_worker(
-        &mut self,
-        worker_id: &str,
-        original_specs: NodeSpecs,
-    ) -> Option<(Assignment, String, String, Vec<String>, Vec<(String, String)>)> {
+    pub fn release_worker(&mut self, worker_id: &str, original_specs: NodeSpecs) -> ScheduleResult {
         // 1. Mark as free (remove from busy)
         self.busy_nodes.remove(worker_id);
         self.busy_timestamps.remove(worker_id);
@@ -127,18 +128,14 @@ impl Scheduler {
         // 2. SMART PIPE: Scan queue for FIRST compatible task
         if let Some(match_result) = self.try_match_pending(&original_specs) {
             return Some(match_result);
-        } else {
-            // 2b. No compatible pending tasks -> Return to Heap
-            self.add_worker_to_pool(original_specs);
-            return None;
         }
+        // 2b. No compatible pending tasks -> Return to Heap
+        self.add_worker_to_pool(original_specs);
+        None
     }
 
     // INTERNAL HELPER: Distributed Queue Matching
-    fn try_match_pending(
-        &mut self,
-        specs: &NodeSpecs,
-    ) -> Option<(Assignment, String, String, Vec<String>, Vec<(String, String)>)> {
+    fn try_match_pending(&mut self, specs: &NodeSpecs) -> ScheduleResult {
         // We cannot just pop_front() because the head of the queue might be a Specialized task
         // while the freed/new worker is General (Generic). Blind popping causes mismatches.
 
@@ -176,12 +173,7 @@ impl Scheduler {
         None
     }
 
-    fn extract_task(
-        &mut self,
-        idx: usize,
-        specs: &NodeSpecs,
-        reason: &str,
-    ) -> Option<(Assignment, String, String, Vec<String>, Vec<(String, String)>)> {
+    fn extract_task(&mut self, idx: usize, specs: &NodeSpecs, reason: &str) -> ScheduleResult {
         // Match found! Extract specifically that task.
         let (task_id, req, posted_by) = self.task_queue.remove(idx).unwrap();
 
@@ -282,7 +274,7 @@ impl Scheduler {
         // 4. Scan Buffer for Generic Match (Tier 3 - Strict Fallback)
         if selected_node.is_none() {
             // Debug Trigger
-            if req.affinities.len() > 0 {
+            if !req.affinities.is_empty() {
                 println!(
                     "⚠️ Scheduler: No Affinity match in buffer. Candidates checked: {:?}",
                     inspected_nodes
@@ -306,11 +298,9 @@ impl Scheduler {
                 // We pick the best hardware match and assume they will download the artifact.
                 // We only strictly fail if hardware requirements are not met.
 
-                if ram_ok && cpu_ok && gpu_ok {
-                    if n.score > best_score {
-                        best_score = n.score;
-                        best_idx = Some(i);
-                    }
+                if ram_ok && cpu_ok && gpu_ok && n.score > best_score {
+                    best_score = n.score;
+                    best_idx = Some(i);
                 }
             }
 

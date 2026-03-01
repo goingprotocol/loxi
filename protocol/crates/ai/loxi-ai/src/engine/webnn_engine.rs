@@ -1,12 +1,15 @@
 use crate::{AiDevice, AiEngine, HiddenStateTensor, PipelineStage};
-use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen]
-extern "C" {
-    // Definimos las bindings base para WebNN ML context
-    // Nota: Esto es experimental y requiere flags en el navegador
-    #[wasm_bindgen(js_namespace = navigator, js_name = ml)]
-    static ML: JsValue;
+// WebNN navigator.ml binding is experimental; suppress deprecation warnings
+// until wasm-bindgen stabilises the thread_local_v2 API.
+#[allow(deprecated, dead_code)]
+mod webnn_bindings {
+    use wasm_bindgen::prelude::*;
+    #[wasm_bindgen]
+    extern "C" {
+        #[wasm_bindgen(js_namespace = navigator, js_name = ml)]
+        pub(super) static ML: JsValue;
+    }
 }
 
 pub struct WebNnEngine {

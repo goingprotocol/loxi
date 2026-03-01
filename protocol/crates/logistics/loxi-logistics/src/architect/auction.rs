@@ -23,6 +23,12 @@ pub struct ArchitectAuction {
     pub auctions: dashmap::DashMap<String, Auction>,
 }
 
+impl Default for ArchitectAuction {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArchitectAuction {
     pub fn new() -> Self {
         Self { auctions: dashmap::DashMap::new() }

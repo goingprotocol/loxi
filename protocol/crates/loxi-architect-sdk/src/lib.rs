@@ -106,8 +106,8 @@ impl<P: DataProvider + 'static> DataServer<P> {
                 Ok(msg) => {
                     if msg.is_text() {
                         if let Ok(text) = msg.to_text() {
-                            match serde_json::from_str::<LoxiMessage>(text) {
-                                Ok(loxi_msg) => match loxi_msg {
+                            if let Ok(loxi_msg) = serde_json::from_str::<LoxiMessage>(text) {
+                                match loxi_msg {
                                     LoxiMessage::PushSolution { auction_id, ticket, payload } => {
                                         let public_key_pem =
                                             std::env::var("RSA_PUBLIC_KEY").unwrap_or_default();
@@ -121,7 +121,7 @@ impl<P: DataProvider + 'static> DataServer<P> {
                                         let mut validation = jsonwebtoken::Validation::new(
                                             jsonwebtoken::Algorithm::RS256,
                                         );
-                                        validation.set_audience(&[auction_id.clone()]);
+                                        validation.set_audience(std::slice::from_ref(&auction_id));
 
                                         match jsonwebtoken::decode::<serde_json::Value>(
                                             &ticket,
@@ -178,7 +178,7 @@ impl<P: DataProvider + 'static> DataServer<P> {
                                         let mut validation = jsonwebtoken::Validation::new(
                                             jsonwebtoken::Algorithm::RS256,
                                         );
-                                        validation.set_audience(&[auction_id.clone()]);
+                                        validation.set_audience(std::slice::from_ref(&auction_id));
 
                                         match jsonwebtoken::decode::<serde_json::Value>(
                                             &ticket,
@@ -281,8 +281,7 @@ impl<P: DataProvider + 'static> DataServer<P> {
                                         }
                                     }
                                     _ => {}
-                                },
-                                Err(_) => {}
+                                }
                             }
                         }
                     }

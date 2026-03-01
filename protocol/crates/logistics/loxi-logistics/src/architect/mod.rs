@@ -20,6 +20,21 @@ use std::sync::Mutex;
 #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
 use uuid;
 
+/// Parameters for `LogisticsArchitect::generate_worker_request`.
+/// Avoids a function signature exceeding the clippy argument limit.
+pub struct WorkerRequestParams {
+    pub task_id: String,
+    pub artifact_hash: String,
+    pub task_type: TaskType,
+    pub mission_id: Option<String>,
+    pub context_hashes: Vec<String>,
+    pub workflow_id: Option<String>,
+    pub state: String,
+    pub min_ram: u64,
+    pub min_cpu: Option<u32>,
+    pub priority_owner: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LogisticsJob {
     pub id: String,
@@ -37,7 +52,7 @@ pub struct LogisticsArchitect {
     pub pending_confirmations: dashmap::DashMap<String, loxi_core::Solution>, // AuctionID -> Control Msg
     pub pending_bids: dashmap::DashMap<String, Vec<loxi_core::Solution>>, // AuctionID -> List of Candidates
     pub expected_results: dashmap::DashMap<String, usize>, // AuctionID -> Total Workers Assigned
-    pub mission_roots: dashmap::DashMap<String, String>, // MissionID -> RootProblemID
+    pub mission_roots: dashmap::DashMap<String, String>,   // MissionID -> RootProblemID
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -62,7 +77,7 @@ impl LogisticsArchitect {
         orchestrator_url: &str,
         shared_cache: Arc<dashmap::DashMap<String, types::Problem>>,
     ) -> Self {
-        let slf = Self {
+        Self {
             domain_id: "logistics".to_string(),
             orchestrator_url: orchestrator_url.to_string(),
             auction_manager: auction::ArchitectAuction::new(),
@@ -73,9 +88,7 @@ impl LogisticsArchitect {
             pending_bids: dashmap::DashMap::new(),
             expected_results: dashmap::DashMap::new(),
             mission_roots: dashmap::DashMap::new(),
-        };
-        // slf.load_state();
-        slf
+        }
     }
 
     #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
@@ -276,15 +289,7 @@ impl LogisticsArchitect {
             mission_roots.insert(entry.key().clone(), entry.value().clone());
         }
 
-        LogisticsState {
-            problems,
-            payloads,
-            confirmations,
-            bids,
-            results,
-            auctions,
-            mission_roots,
-        }
+        LogisticsState { problems, payloads, confirmations, bids, results, auctions, mission_roots }
     }
 
     pub fn save_state(&self) {
@@ -308,23 +313,23 @@ impl LogisticsArchitect {
     }
 
     /// Step 2: Request specialized workers from the Orchestrator pool.
-    pub fn generate_worker_request(
-        &self,
-        task_id: String,
-        artifact_hash: &str,
-        task_type: TaskType,
-        mission_id: Option<String>,
-        context_hashes: Vec<String>,
-        workflow_id: Option<String>,
-        state: &str,
-        min_ram: u64,
-        min_cpu: Option<u32>,
-        priority_owner: Option<String>,
-    ) -> TaskRequirement {
+    pub fn generate_worker_request(&self, params: WorkerRequestParams) -> TaskRequirement {
+        let WorkerRequestParams {
+            task_id,
+            artifact_hash,
+            task_type,
+            mission_id,
+            context_hashes,
+            workflow_id,
+            state,
+            min_ram,
+            min_cpu,
+            priority_owner,
+        } = params;
         let mut affinities = context_hashes;
-        affinities.push(artifact_hash.to_string());
+        affinities.push(artifact_hash);
 
-        let mut metadata = vec![("state".to_string(), state.to_string())];
+        let mut metadata = vec![("state".to_string(), state)];
         if let Some(m_id) = mission_id {
             metadata.push(("mission_id".to_string(), m_id));
         }
@@ -382,23 +387,27 @@ impl LogisticsArchitect {
                 .clone()
                 .unwrap_or_else(|| "loxi_vrp".to_string());
 
-            let req = self.generate_worker_request(
-                task_id.clone(),
-                &solver_hash,
-                TaskType::Compute,
-                Some(mission_id.clone()),
-                problem.config.required_contexts.clone(),
-                problem.config.workflow_id.clone(),
-                "solving",
-                1024,
-                problem.config.min_cpu,
-                problem.config.priority_owner.clone(),
-            );
+            let req = self.generate_worker_request(WorkerRequestParams {
+                task_id: task_id.clone(),
+                artifact_hash: solver_hash,
+                task_type: TaskType::Compute,
+                mission_id: Some(mission_id.clone()),
+                context_hashes: problem.config.required_contexts.clone(),
+                workflow_id: problem.config.workflow_id.clone(),
+                state: "solving".to_string(),
+                min_ram: 1024,
+                min_cpu: problem.config.min_cpu,
+                priority_owner: problem.config.priority_owner.clone(),
+            });
 
             self.pending_problems.insert(task_id.clone(), problem);
             self.expected_results.insert(task_id.clone(), 1);
             ids.push(task_id.clone());
-            messages.push(self.auction_manager.create_auction(task_id, self.domain_id.clone(), req));
+            messages.push(self.auction_manager.create_auction(
+                task_id,
+                self.domain_id.clone(),
+                req,
+            ));
 
             // self.save_state();
             return (messages, ids);
@@ -452,24 +461,28 @@ impl LogisticsArchitect {
                     .clone()
                     .unwrap_or_else(|| "loxi_partitioner".to_string());
 
-                let req = self.generate_worker_request(
-                    sector_task_id.clone(),
-                    &partitioner_hash,
-                    TaskType::Custom("sector".to_string()),
-                    Some(mission_id.clone()),
-                    problem.config.required_contexts.clone(),
-                    problem.config.workflow_id.clone(),
-                    "partitioning",
-                    8192,
-                    problem.config.min_cpu,
-                    problem.config.priority_owner.clone(),
-                );
+                let req = self.generate_worker_request(WorkerRequestParams {
+                    task_id: sector_task_id.clone(),
+                    artifact_hash: partitioner_hash,
+                    task_type: TaskType::Custom("sector".to_string()),
+                    mission_id: Some(mission_id.clone()),
+                    context_hashes: problem.config.required_contexts.clone(),
+                    workflow_id: problem.config.workflow_id.clone(),
+                    state: "partitioning".to_string(),
+                    min_ram: 8192,
+                    min_cpu: problem.config.min_cpu,
+                    priority_owner: problem.config.priority_owner.clone(),
+                });
 
                 self.pending_problems.insert(sector_task_id.clone(), sub_problem);
                 self.expected_results.insert(sector_task_id.clone(), 1);
                 ids.push(sector_task_id.clone());
                 sector_ids.push(sector_task_id.clone());
-                messages.push(self.auction_manager.create_auction(sector_task_id, self.domain_id.clone(), req));
+                messages.push(self.auction_manager.create_auction(
+                    sector_task_id,
+                    self.domain_id.clone(),
+                    req,
+                ));
             }
 
             // Update parent problem to know its sub-tasks
@@ -530,20 +543,24 @@ impl LogisticsArchitect {
                 .matrix_artifact_hash
                 .clone()
                 .unwrap_or_else(|| "loxi_matrix".to_string());
-            let req = self.generate_worker_request(
-                sub_task_id.clone(),
-                &matrix_hash,
-                TaskType::Compute,
-                Some(mission_id.clone()),
-                problem.config.required_contexts.clone(),
-                problem.config.workflow_id.clone(),
-                "matrix",
-                8192,
-                problem.config.min_cpu,
-                problem.config.priority_owner.clone(),
-            );
+            let req = self.generate_worker_request(WorkerRequestParams {
+                task_id: sub_task_id.clone(),
+                artifact_hash: matrix_hash,
+                task_type: TaskType::Compute,
+                mission_id: Some(mission_id.clone()),
+                context_hashes: problem.config.required_contexts.clone(),
+                workflow_id: problem.config.workflow_id.clone(),
+                state: "matrix".to_string(),
+                min_ram: 8192,
+                min_cpu: problem.config.min_cpu,
+                priority_owner: problem.config.priority_owner.clone(),
+            });
 
-            messages.push(self.auction_manager.create_auction(sub_task_id, self.domain_id.clone(), req));
+            messages.push(self.auction_manager.create_auction(
+                sub_task_id,
+                self.domain_id.clone(),
+                req,
+            ));
         }
 
         // Update parent problem to know its sub-tasks
@@ -593,16 +610,14 @@ impl LogisticsArchitect {
                             } else {
                                 true
                             }
+                        } else if incoming_len == 0 {
+                            println!(
+                                "🛑 Architect: REJECTING empty PostTask for {} (Brand New ID from network)",
+                                auction_id
+                            );
+                            false
                         } else {
-                            if incoming_len == 0 {
-                                println!(
-                                    "🛑 Architect: REJECTING empty PostTask for {} (Brand New ID from network)",
-                                    auction_id
-                                );
-                                false
-                            } else {
-                                true
-                            }
+                            true
                         };
                         if should_insert {
                             println!(
@@ -648,7 +663,10 @@ impl LogisticsArchitect {
 
                     // 2. TRIGGER SELECTION: If threshold met (e.g., 100% for 1:1)
                     if (received as f32) >= (expected as f32) * 1.0 {
-                        println!("🎯 Architect: Quorum met for {}. Selecting winner...", auction_id);
+                        println!(
+                            "🎯 Architect: Quorum met for {}. Selecting winner...",
+                            auction_id
+                        );
                         return self.evaluate_and_reveal(auction_id);
                     }
 
@@ -780,32 +798,39 @@ impl LogisticsArchitect {
                                     .clone()
                                     .unwrap_or_else(|| "loxi_matrix".to_string());
 
-                                let req = self.generate_worker_request(
-                                    sub_task_id.clone(),
-                                    &matrix_hash,
-                                    TaskType::Compute,
-                                    mission_id.clone(),
-                                    config.required_contexts.clone(),
-                                    config.workflow_id.clone(),
-                                    "matrix",
-                                    8192,
-                                    config.min_cpu,
-                                    config.priority_owner.clone(),
-                                );
+                                let req = self.generate_worker_request(WorkerRequestParams {
+                                    task_id: sub_task_id.clone(),
+                                    artifact_hash: matrix_hash,
+                                    task_type: TaskType::Compute,
+                                    mission_id: mission_id.clone(),
+                                    context_hashes: config.required_contexts.clone(),
+                                    workflow_id: config.workflow_id.clone(),
+                                    state: "matrix".to_string(),
+                                    min_ram: 8192,
+                                    min_cpu: config.min_cpu,
+                                    priority_owner: config.priority_owner.clone(),
+                                });
 
                                 self.pending_problems.insert(sub_task_id.clone(), sub_problem);
-                                
+
                                 // 🔑 CRITICAL: Track subtasks at the ROOT level for mission completion
                                 let root_id = self.find_ultimate_root(&auction_id);
-                                if let Some(mut root_ref) = self.pending_problems.get_mut(&root_id) {
+                                if let Some(mut root_ref) = self.pending_problems.get_mut(&root_id)
+                                {
                                     if !root_ref.subtask_ids.contains(&sub_task_id) {
                                         root_ref.subtask_ids.push(sub_task_id.clone());
-                                        println!("🌳 Root {} now tracking sub-task {}", root_id, sub_task_id);
+                                        println!(
+                                            "🌳 Root {} now tracking sub-task {}",
+                                            root_id, sub_task_id
+                                        );
                                     }
                                 }
 
-                                let msg =
-                                    self.auction_manager.create_auction(sub_task_id.clone(), self.domain_id.clone(), req);
+                                let msg = self.auction_manager.create_auction(
+                                    sub_task_id.clone(),
+                                    self.domain_id.clone(),
+                                    req,
+                                );
                                 println!(
                                     "📡 Architect: [{}/{}] Posting Matrix Sub-task: {}",
                                     i + 1,
@@ -872,8 +897,11 @@ impl LogisticsArchitect {
                                 .map(|row| row.iter().map(|cost| cost.time as u32).collect())
                                 .collect();
                             problem.time_matrix = Some(time_matrix);
-                            println!("✅ Architect: Parsed direct ValhallaSolution for {} (Dim: {})", 
-                                auction_id, valhalla.sources_to_targets.len());
+                            println!(
+                                "✅ Architect: Parsed direct ValhallaSolution for {} (Dim: {})",
+                                auction_id,
+                                valhalla.sources_to_targets.len()
+                            );
                             matrix_parsed = true;
                         } else if let Ok(loxi_sol) =
                             serde_json::from_str::<types::Solution>(&actual_payload)
@@ -899,8 +927,11 @@ impl LogisticsArchitect {
                                         })
                                         .collect();
                                     problem.time_matrix = Some(time_matrix);
-                                    println!("✅ Architect: Parsed Solution.matrix for {} (Dim: {})", 
-                                        auction_id, valhalla.sources_to_targets.len());
+                                    println!(
+                                        "✅ Architect: Parsed Solution.matrix for {} (Dim: {})",
+                                        auction_id,
+                                        valhalla.sources_to_targets.len()
+                                    );
                                     matrix_parsed = true;
                                 } else {
                                     println!("⚠️ Architect: Solution.matrix was present but failed to parse into ValhallaSolution for {}", auction_id);
@@ -944,18 +975,18 @@ impl LogisticsArchitect {
                         .unwrap_or_else(|| "loxi_vrp".to_string());
 
                     let solve_id = uuid::Uuid::new_v4().to_string();
-                    let req = self.generate_worker_request(
-                        solve_id.clone(),
-                        &solver_hash,
-                        TaskType::Compute,
-                        problem.mission_id.clone(),
-                        problem.config.required_contexts.clone(),
-                        problem.config.workflow_id.clone(),
-                        "solving",
-                        1024,
-                        problem.config.min_cpu,
-                        problem.config.priority_owner.clone(),
-                    );
+                    let req = self.generate_worker_request(WorkerRequestParams {
+                        task_id: solve_id.clone(),
+                        artifact_hash: solver_hash,
+                        task_type: TaskType::Compute,
+                        mission_id: problem.mission_id.clone(),
+                        context_hashes: problem.config.required_contexts.clone(),
+                        workflow_id: problem.config.workflow_id.clone(),
+                        state: "solving".to_string(),
+                        min_ram: 1024,
+                        min_cpu: problem.config.min_cpu,
+                        priority_owner: problem.config.priority_owner.clone(),
+                    });
 
                     let mut solve_problem = problem.clone();
                     solve_problem.id = Some(solve_id.clone());
@@ -971,8 +1002,8 @@ impl LogisticsArchitect {
 
                     println!(
                         "🚀 Architect: Posting Solver Task for sub-problem {} -> NEW ID: {}; Stops: {} (Matrix Dim: {})",
-                        auction_id, 
-                        solve_id, 
+                        auction_id,
+                        solve_id,
                         solve_problem.stops.len(),
                         solve_problem.distance_matrix.as_ref().map(|m| format!("{}x{}", m.len(), m.first().map(|r| r.len()).unwrap_or(0))).unwrap_or("None".to_string())
                     );
@@ -983,7 +1014,7 @@ impl LogisticsArchitect {
                         );
                     }
                     self.pending_problems.insert(solve_id.clone(), solve_problem);
-                    
+
                     // 🔑 CRITICAL: Track Solver task at the ROOT level
                     let root_id = self.find_ultimate_root(&auction_id);
                     if let Some(mut root_ref) = self.pending_problems.get_mut(&root_id) {
@@ -1040,8 +1071,8 @@ impl LogisticsArchitect {
 
                                 // 🟢 Diagnostic: Verify matrix_index preservation
                                 if !retry_problem.stops.is_empty() {
-                                    println!("📊 Architect: Re-queuing {} stops for mission {}. Indices: {:?}", 
-                                        retry_problem.stops.len(), 
+                                    println!("📊 Architect: Re-queuing {} stops for mission {}. Indices: {:?}",
+                                        retry_problem.stops.len(),
                                         retry_problem.mission_id.as_ref().unwrap_or(&"unknown".to_string()),
                                         retry_problem.stops.iter().map(|s| s.matrix_index).collect::<Vec<_>>()
                                     );
@@ -1061,45 +1092,56 @@ impl LogisticsArchitect {
                                     .clone()
                                     .unwrap_or_else(|| "loxi_vrp".to_string());
 
-                                let req = self.generate_worker_request(
-                                    retry_id.clone(),
-                                    &solver_hash,
-                                    TaskType::Compute,
-                                    problem.mission_id.clone(),
-                                    problem.config.required_contexts.clone(),
-                                    problem.config.workflow_id.clone(),
-                                    "solving-retry",
-                                    1024,
-                                    problem.config.min_cpu,
-                                    problem.config.priority_owner.clone(),
-                                );
+                                let req = self.generate_worker_request(WorkerRequestParams {
+                                    task_id: retry_id.clone(),
+                                    artifact_hash: solver_hash,
+                                    task_type: TaskType::Compute,
+                                    mission_id: problem.mission_id.clone(),
+                                    context_hashes: problem.config.required_contexts.clone(),
+                                    workflow_id: problem.config.workflow_id.clone(),
+                                    state: "solving-retry".to_string(),
+                                    min_ram: 1024,
+                                    min_cpu: problem.config.min_cpu,
+                                    priority_owner: problem.config.priority_owner.clone(),
+                                });
 
                                 // 🔑 CRITICAL: Update parent's subtask_ids with the new retry task
                                 if let Some(_m_id) = &problem.mission_id {
                                     // 1. Traverse up to find the ULTIMATE root of this mission
                                     let rid = self.find_ultimate_root(&auction_id);
                                     retry_problem.parent_id = Some(rid.clone());
-                                    
+
                                     self.pending_problems.insert(retry_id.clone(), retry_problem);
-                                    
-                                    if let Some(mut root_ref) = self.pending_problems.get_mut(&rid) {
-                                            // If the current task was the root and just spawned its first subtask,
-                                            // we must add ITSELF to the subtask list to preserve its routes,
-                                            // UNLESS it's already there (e.g. from partitioning)
-                                            if rid == auction_id && root_ref.subtask_ids.is_empty() {
-                                                root_ref.subtask_ids.push(auction_id.clone());
-                                                println!("🌳 Root {} now tracking itself as subtask.", rid);
-                                            }
-                                            
-                                            // Add the retry task
-                                            if !root_ref.subtask_ids.contains(&retry_id) {
-                                                root_ref.subtask_ids.push(retry_id.clone());
-                                                println!("✅ Updated mission root {} with new retry task {}", rid, retry_id);
-                                            }
+
+                                    if let Some(mut root_ref) = self.pending_problems.get_mut(&rid)
+                                    {
+                                        // If the current task was the root and just spawned its first subtask,
+                                        // we must add ITSELF to the subtask list to preserve its routes,
+                                        // UNLESS it's already there (e.g. from partitioning)
+                                        if rid == auction_id && root_ref.subtask_ids.is_empty() {
+                                            root_ref.subtask_ids.push(auction_id.clone());
+                                            println!(
+                                                "🌳 Root {} now tracking itself as subtask.",
+                                                rid
+                                            );
+                                        }
+
+                                        // Add the retry task
+                                        if !root_ref.subtask_ids.contains(&retry_id) {
+                                            root_ref.subtask_ids.push(retry_id.clone());
+                                            println!(
+                                                "✅ Updated mission root {} with new retry task {}",
+                                                rid, retry_id
+                                            );
                                         }
                                     }
-                                    
-                                    messages.push(self.auction_manager.create_auction(retry_id, self.domain_id.clone(), req));
+                                }
+
+                                messages.push(self.auction_manager.create_auction(
+                                    retry_id,
+                                    self.domain_id.clone(),
+                                    req,
+                                ));
                             }
 
                             // 3. EMIT MISSION UPDATE
@@ -1122,13 +1164,20 @@ impl LogisticsArchitect {
                                         problem_id: Some(auction_id.clone()),
                                         client_owner_id: owner_id.clone(),
                                         status: "processing".to_string(),
-                                        message: Some(format!("Solver finished sub-auction: {}", auction_id)),
-                                        timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+                                        message: Some(format!(
+                                            "Solver finished sub-auction: {}",
+                                            auction_id
+                                        )),
+                                        timestamp: std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_secs(),
                                     };
                                     messages.push(LoxiMessage::NotifyOwner {
                                         owner_id: owner_id.clone(),
                                         notify_type: "PARTIAL_RESULT".to_string(),
-                                        payload: serde_json::to_string(&log_payload).unwrap_or_default(),
+                                        payload: serde_json::to_string(&log_payload)
+                                            .unwrap_or_default(),
                                         metadata: Vec::new(),
                                     });
                                 }
@@ -1151,7 +1200,8 @@ impl LogisticsArchitect {
     }
 
     pub fn evaluate_and_reveal(&mut self, auction_id: String) -> Vec<LoxiMessage> {
-        let bids = self.pending_bids.get(&auction_id).map(|r| r.value().clone()).unwrap_or_default();
+        let bids =
+            self.pending_bids.get(&auction_id).map(|r| r.value().clone()).unwrap_or_default();
         if bids.is_empty() {
             return Vec::new();
         }
@@ -1232,13 +1282,11 @@ impl LogisticsArchitect {
             full_solution.payload = Some(payload); // Inject
             self.process_solution(full_solution)
         } else {
-            let available_keys: Vec<String> = self.pending_confirmations.iter()
-                .map(|entry| entry.key().clone())
-                .collect();
+            let available_keys: Vec<String> =
+                self.pending_confirmations.iter().map(|entry| entry.key().clone()).collect();
             println!(
                 "⏳ [Architect] Payload arrived but NO confirmation found for {}. Available: {:?}",
-                auction_id,
-                available_keys
+                auction_id, available_keys
             );
             self.pending_payloads.insert(auction_id, payload);
             Vec::new()
@@ -1250,11 +1298,14 @@ impl LogisticsArchitect {
         let mut root_id = auction_id.to_string();
         let mut visited = std::collections::HashSet::new();
         visited.insert(current_id.clone());
-        
+
         while let Some(prob) = self.pending_problems.get(&current_id) {
             if let Some(pid) = &prob.parent_id {
                 if visited.contains(pid) {
-                    println!("🚨 [Logistics] Circular dependency detected in task hierarchy for {}!", auction_id);
+                    println!(
+                        "🚨 [Logistics] Circular dependency detected in task hierarchy for {}!",
+                        auction_id
+                    );
                     break;
                 }
                 current_id = pid.clone();
@@ -1270,7 +1321,7 @@ impl LogisticsArchitect {
     pub fn check_mission_completion(&mut self, mission_id: &str) -> Vec<LoxiMessage> {
         let mut messages = Vec::new();
         println!("🏁 Architect: Checking hierarchical completion for mission {}", mission_id);
-        
+
         let root_problem_id = if let Some(id) = self.mission_roots.get(mission_id) {
             id.clone()
         } else {
@@ -1292,12 +1343,14 @@ impl LogisticsArchitect {
             }
         };
 
-        if root_problem_id.is_empty() { return Vec::new(); }
+        if root_problem_id.is_empty() {
+            return Vec::new();
+        }
         let rid = root_problem_id;
-        
+
         // Use a block to drop the read lock as soon as possible
         let root_problem = self.pending_problems.get(&rid).map(|r| r.value().clone());
-        
+
         if root_problem.is_none() {
             println!("⚠️ Mission {} root problem {} missing from cache", mission_id, rid);
             return Vec::new();
@@ -1319,7 +1372,7 @@ impl LogisticsArchitect {
                         if let Some(ref sol) = sub.solution {
                             completed_count += 1;
                             combined_all_stops.extend(sol.all_stops.clone());
-                            
+
                             // 🔑 CRITICAL: Aggregate tours correctly
                             if let Some(ref sub_tours) = sol.tours {
                                 combined_tours.extend(sub_tours.clone());
@@ -1327,7 +1380,7 @@ impl LogisticsArchitect {
                                 // Fallback for simple/leaf tasks
                                 combined_tours.push(sol.all_stops.clone());
                             }
-                            
+
                             combined_stops.extend(sub.stops.clone());
                             combined_cost += sol.cost;
                         }
@@ -1338,25 +1391,30 @@ impl LogisticsArchitect {
                 if let Some(ref sol) = root.solution {
                     completed_count = 1;
                     combined_all_stops.extend(sol.all_stops.clone());
-                    
+
                     if let Some(ref sub_tours) = sol.tours {
                         combined_tours.extend(sub_tours.clone());
                     } else {
                         combined_tours.push(sol.all_stops.clone());
                     }
-                    
+
                     combined_stops.extend(root.stops.clone());
                     combined_cost += sol.cost;
                 }
             }
         }
 
-        println!("📊 Mission {}: {}/{} tasks completed. Combined {} paths.", 
-            mission_id, completed_count, total_count, combined_tours.len());
+        println!(
+            "📊 Mission {}: {}/{} tasks completed. Combined {} paths.",
+            mission_id,
+            completed_count,
+            total_count,
+            combined_tours.len()
+        );
 
         if completed_count == total_count && total_count > 0 {
             println!("🎉 Mission {} FULLY COMPLETED!", mission_id);
-            
+
             let final_solution = types::Solution {
                 all_stops: combined_all_stops,
                 tours: Some(combined_tours),
@@ -1369,7 +1427,8 @@ impl LogisticsArchitect {
             };
 
             // 1. Update the root problem
-            let client_owner_id = if let Some(mut parent_ref) = self.pending_problems.get_mut(&rid) {
+            let client_owner_id = if let Some(mut parent_ref) = self.pending_problems.get_mut(&rid)
+            {
                 let parent = parent_ref.value_mut();
                 parent.solution = Some(final_solution.clone());
                 parent.stops = combined_stops.clone(); // HYDRATE: Ensure the root problem has the actual stops!
@@ -1377,11 +1436,11 @@ impl LogisticsArchitect {
             } else {
                 None
             };
-            
+
             // 2. Notify the owner with a complete artifact package
             if let Some(owner_id) = client_owner_id {
                 println!("📢 Emitting NotifyOwner (Complete Artifact) for client: {}", owner_id);
-                
+
                 let completion_payload = serde_json::json!({
                     "mission_id": mission_id,
                     "solution": final_solution,
@@ -1393,7 +1452,10 @@ impl LogisticsArchitect {
                     owner_id: owner_id.clone(),
                     notify_type: "MISSION_COMPLETED".to_string(),
                     payload: serde_json::to_string(&completion_payload).unwrap_or_default(),
-                    metadata: vec![("visualizer_artifact".to_string(), "loxi_solution_visualizer".to_string())],
+                    metadata: vec![(
+                        "visualizer_artifact".to_string(),
+                        "loxi_solution_visualizer".to_string(),
+                    )],
                 });
             }
 
@@ -1412,7 +1474,6 @@ impl LogisticsArchitect {
             messages
         }
     }
-
 }
 
 #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]

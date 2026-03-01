@@ -16,6 +16,12 @@ pub struct Partitioner {
     pub max_cluster_size: usize,
 }
 
+impl Default for Partitioner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Partitioner {
     pub fn new() -> Self {
         Self {
@@ -30,7 +36,7 @@ impl Partitioner {
         let mut initial_buckets: HashMap<CellIndex, Vec<String>> = HashMap::new();
 
         // 1. Quantize (Binning) - Group stops by their H3 Cell based on actual location
-        for (_i, stop) in problem.stops.iter().enumerate() {
+        for stop in &problem.stops {
             let (lat, lon) = stop.location.to_f64();
 
             if let Ok(cell) = LatLng::new(lat, lon).map(|ll| ll.to_cell(self.resolution)) {
@@ -43,9 +49,7 @@ impl Partitioner {
         // Step 1: Bin pointers to cells.
 
         // Step 2: Region Growing (The "Blob" Logic)
-        let partitions = self.region_growing(initial_buckets);
-
-        partitions
+        self.region_growing(initial_buckets)
     }
 
     fn region_growing(&self, buckets: HashMap<CellIndex, Vec<String>>) -> Vec<Partition> {
