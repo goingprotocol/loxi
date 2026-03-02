@@ -16,8 +16,11 @@ if [ -f "$ENV_FILE" ]; then
     set -a
     source "$ENV_FILE"
     set +a
+elif [ -n "$RSA_PRIVATE_KEY" ] && [ -n "$RSA_PUBLIC_KEY" ]; then
+    echo "ℹ️  $ENV_FILE not found; using RSA_PRIVATE_KEY/RSA_PUBLIC_KEY from environment."
 else
-    echo "⚠️  $ENV_FILE not found. Generate keys with: bash scripts/run_node.sh --setup"
+    echo "⚠️  $ENV_FILE not found and RSA_PRIVATE_KEY/RSA_PUBLIC_KEY not set in environment."
+    echo "   Generate keys with: bash scripts/run_node.sh --setup"
     echo "   See: cp $ENV_FILE.example $ENV_FILE  (then fill in your RSA keys)"
     exit 1
 fi
