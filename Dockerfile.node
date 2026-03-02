@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1
+# ──────────────────────────────────────────────────────────────────────────────
+# Stage 1: build the Rust binary
+# ──────────────────────────────────────────────────────────────────────────────
+FROM rust:1.77 AS builder
+
+WORKDIR /build
+
+# Cache dependency compilation separately from source
+COPY protocol/Cargo.toml protocol/Cargo.lock ./protocol/
+# Copy all crate Cargo.toml files so cargo can resolve the workspace
+COPY protocol/crates ./protocol/crates/
+
+# Pre-fetch and compile dependencies (cached unless Cargo.* changes)
+RUN cargo build --manifest-path protocol/Cargo.toml -p loxi-cli --release 2>/dev/null || true
+
+# Now copy full source and do the real build
+COPY protocol ./protocol/
+RUN cargo build --manifest-path protocol/Cargo.toml -p loxi-cli --release
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Stage 2: minimal runtime image
+# ──────────────────────────────────────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy the compiled binary
+COPY --from=builder /build/protocol/target/release/loxi /usr/local/bin/loxi
+
+# Copy WASM artifacts and public assets served by the logistics server
+COPY protocol/crates/logistics/loxi-logistics/public ./public
+
+# Valhalla tiles are mounted at runtime via the compose volume.
+# Create the expected path so the server can start without tiles present.
+RUN mkdir -p /data/valhalla_tiles
+
+EXPOSE 3005 8080
+
+# The env file is supplied via compose env_file / environment variables.
+CMD ["loxi", "node", "--port", "3005", "--dist", "/app/public"]

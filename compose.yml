@@ -1,0 +1,56 @@
+# Loxi one-command dev stack
+#
+# Usage:
+#   docker compose up --build
+#
+# Prerequisites:
+#   1. Generate RSA keypair and place it in protocol/crates/loxi-orchestrator/.env
+#      (see scripts/run_node.sh --setup or the README for instructions)
+#   2. Have Valhalla tiles at protocol/crates/logistics/loxi-logistics/data/valhalla_tiles/
+#      (run bash scripts/download_tiles.sh once, or set LOXI_CITIES for multi-city)
+#
+# Services:
+#   node        - Orchestrator (ws :3005) + Artifact/API server (http :8080)
+#   worker-web  - Vite dev server for the browser worker UI (http :5173)
+
+services:
+  node:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    ports:
+      - "3005:3005"
+      - "8080:8080"
+    env_file:
+      - protocol/crates/loxi-orchestrator/.env
+    volumes:
+      # Valhalla tiles (read-only inside the container)
+      - ./protocol/crates/logistics/loxi-logistics/data/valhalla_tiles:/data/valhalla_tiles:ro
+      # Persistent auction store (survives container restarts)
+      - loxi_auction_db:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/workers/count"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  worker-web:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/apps/worker-web/node_modules
+    command: sh -c "cd apps/worker-web && npm ci && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    depends_on:
+      node:
+        condition: service_healthy
+    environment:
+      - VITE_ORCHESTRATOR_URL=ws://localhost:3005
+
+volumes:
+  loxi_auction_db:

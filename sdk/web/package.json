@@ -1,10 +1,16 @@
 {
-    "name": "@loxi/worker-sdk",
+    "name": "@loxi/worker-device",
     "version": "0.1.0",
-    "description": "Universal Worker SDK for Loxi Protocol",
+    "description": "Universal Worker SDK for Loxi Protocol — matches the LoxiWorkerDevice class",
     "main": "dist/index.js",
     "module": "dist/index.mjs",
     "types": "dist/index.d.ts",
+    "files": [
+        "dist"
+    ],
+    "publishConfig": {
+        "access": "public"
+    },
     "scripts": {
         "build": "tsup src/index.ts --format cjs,esm --dts --clean",
         "dev": "tsup src/index.ts --format cjs,esm --watch --dts",

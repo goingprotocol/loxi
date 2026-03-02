@@ -172,13 +172,17 @@ impl LogisticsArchitect {
                         msgs
                     };
 
-                    for resp in responses {
-                        let json = serde_json::to_string(&resp).unwrap();
-                         write
-                            .send(tokio_tungstenite::tungstenite::Message::Text(json))
+                    // Feed all auction requests into the sink buffer first, then
+                    // flush once — this fires all partition auctions as a batch
+                    // rather than waiting for each send to complete sequentially.
+                    for resp in &responses {
+                        let json = serde_json::to_string(resp).unwrap();
+                        write
+                            .feed(tokio_tungstenite::tungstenite::Message::Text(json))
                             .await
-                            .expect("Failed to send Auction Request");
+                            .expect("Failed to feed Auction Request");
                     }
+                    write.flush().await.expect("Failed to flush Auction Requests");
                 }
 
                 // C. Direct Protocol Messages (from Data Plane)

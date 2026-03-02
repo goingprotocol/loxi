@@ -5,8 +5,21 @@ use std::time::{Duration, Instant};
 
 type ScheduleResult = Option<(Assignment, String, String, Vec<String>, Vec<(String, String)>)>;
 
-// --- CONFIG: Trusted Partners (Hardcoded for V1) ---
-const TRUSTED_PARTNERS: &[&str] = &[];
+// --- CONFIG: Trusted Partners ---
+// Loaded once at startup from LOXI_TRUSTED_PARTNERS env var (comma-separated node IDs).
+// Example: LOXI_TRUSTED_PARTNERS=node-abc,node-xyz
+static TRUSTED_PARTNERS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+fn trusted_partners() -> &'static [String] {
+    TRUSTED_PARTNERS.get_or_init(|| {
+        std::env::var("LOXI_TRUSTED_PARTNERS")
+            .unwrap_or_default()
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.trim().to_string())
+            .collect()
+    })
+}
 
 // --- Worker Node (Heap Item) ---
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -223,7 +236,7 @@ impl Scheduler {
 
         // 2. Scan Buffer for VIP Match
         if let Some(ref target_owner) = req.priority_for_owner {
-            if TRUSTED_PARTNERS.contains(&target_owner.as_str()) {
+            if trusted_partners().iter().any(|p| p == target_owner) {
                 if let Some(pos) = buffer.iter().position(|n| {
                     let ram_ok = n.ram_mb >= req.min_ram_mb;
                     let cpu_ok = n.thread_count >= req.min_cpu_threads;
