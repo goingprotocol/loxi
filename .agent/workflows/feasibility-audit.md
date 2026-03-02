@@ -1,21 +1,21 @@
 ---
-description: Realizar una auditoría de viabilidad y riesgos para una tarea específica
+description: Run a feasibility and risk audit for a specific task
 ---
 
-Antes de pasar a la fase de EXECUTION en cualquier tarea del roadmap, se debe ejecutar este flujo:
+Before moving to the EXECUTION phase on any roadmap task, run this workflow:
 
-1. **Contexto Técnico**: Identificar qué componentes (Crates, SDKs, APIs) serán afectados.
-2. **Análisis de Capacidad**: 
-   - ¿Supera el límite de 4GB de RAM de Wasm32?
-   - ¿Qué latencia de red añade a la respuesta (TTFT)?
-   - ¿Requiere hardware especializado (WGPU/GPU)?
-3. **Detección de Riesgos**:
-   - **Drift Numérico**: ¿Los cálculos serán determinísticos en todos los nodos?
-   - **Fragilidad**: ¿Si un nodo se desconecta, se cae todo el pipeline?
-   - **Seguridad**: ¿Hay fuga de datos en claro (clear-text)?
-4. **Puntuación de Viabilidad (1-10)**: 
-   - Evaluar complejidad vs. beneficio.
-5. **Mitigación**: Definir al menos una medida para cada riesgo crítico detectado.
-6. **Registro**: Los resultados se deben añadir al inicio de `/brain/feasibility_report.md`.
+1. **Technical Context**: Identify which components (Crates, SDKs, APIs) will be affected.
+2. **Capacity Analysis**:
+   - Does it exceed the 4 GB RAM limit of Wasm32?
+   - What network latency does it add to the response (TTFT)?
+   - Does it require specialised hardware (WGPU/GPU)?
+3. **Risk Detection**:
+   - **Numerical Drift**: Will calculations be deterministic across all nodes?
+   - **Fragility**: If a node disconnects, does the entire pipeline fail?
+   - **Security**: Is any data exposed in clear text?
+4. **Feasibility Score (1–10)**:
+   - Evaluate complexity vs. benefit.
+5. **Mitigation**: Define at least one measure for each critical risk found.
+6. **Log**: Results must be prepended to `/brain/feasibility_report.md`.
 
-Ejecutar este workflow garantiza que Loxi AI sea robusto y escalable.
+Running this workflow ensures Loxi is robust and scalable.

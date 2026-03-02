@@ -39,12 +39,20 @@ env_orchestrator.txt
 *.log
 protocol/*.txt
 
-# IDE
+# IDE & AI tooling — local config only, never commit
 .vscode/
 .idea/
+.cursor/
+.claude/settings.json
+.claude/settings.local.json
 *.swp
 *.swo
 *~
+
+# Session transcripts and scratch files
+redactor-claude.md
+bench-output.txt
+test-output.txt
 
 # OS
 .DS_Store

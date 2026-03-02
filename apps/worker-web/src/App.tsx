@@ -307,6 +307,19 @@ function App() {
     addLog(`🔧 Created ${count} stops.`, "info");
   };
 
+  // B3: solution metrics — must be before the early return to keep hook call order stable
+  const metrics = useMemo(() => {
+    const sol = Object.values(activeSolutions).find(
+      (s: any) => s.mission_id === currentMission) as any;
+    if (!sol?.cost_breakdown) return null;
+    return {
+      distance: (sol.cost_breakdown.distance / 1000).toFixed(1),
+      vehicles: sol.tours?.length ?? sol.routes?.length ?? 0,
+      stops: sol.stops?.length ?? 0,
+      unassigned: sol.unassigned_jobs?.length ?? 0,
+    };
+  }, [activeSolutions, currentMission]);
+
   if (!nodeSpecs) return <div className="loading">Hardware Detection...</div>
 
   // --- DATA PREPARATION FOR MAP ---
@@ -367,19 +380,6 @@ function App() {
   const currentShapes = Object.values(activeSolutions)
     .filter((sol: any) => sol.mission_id === currentMission && Array.isArray(sol.routes))
     .flatMap((sol: any) => sol.routes.map((r: any) => r.shape).filter(Boolean));
-
-  // B3: solution metrics
-  const metrics = useMemo(() => {
-    const sol = Object.values(activeSolutions).find(
-      (s: any) => s.mission_id === currentMission) as any;
-    if (!sol?.cost_breakdown) return null;
-    return {
-      distance: (sol.cost_breakdown.distance / 1000).toFixed(1),
-      vehicles: sol.tours?.length ?? sol.routes?.length ?? 0,
-      stops: sol.stops?.length ?? 0,
-      unassigned: sol.unassigned_jobs?.length ?? 0,
-    };
-  }, [activeSolutions, currentMission]);
 
   // C3: export solution
   const exportSolution = (format: 'csv' | 'geojson') => {
