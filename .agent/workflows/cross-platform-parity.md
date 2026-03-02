@@ -1,13 +1,13 @@
 ---
-description: Verificar la paridad entre Native y WASM
+description: Verify parity between Native and WASM
 ---
 
-Este flujo se ejecuta al modificar la lógica de red (Fase D) o de descarga (Fase C):
+Run this workflow whenever networking logic (Phase D) or download logic (Phase C) is modified:
 
-1. **Backend Switch**: Probar que las mismas llamadas al `ShardManager` funcionan usando `fetch` (WASM) y `reqwest` (Native).
-2. **Sandboxing Check**: Confirmar que los headers de red (como Range Requests) no violen las políticas de CORS del navegador.
-3. **Memory Dynamics (Wasm64)**: Al usar `wasm64`, el límite de 4GB desaparece. Verificar que la asignación de memoria sea dinámica y que el nodo pueda escalar según la RAM disponible del sistema, permitiendo contextos masivos.
-4. **Feature Parity**: Si se añade una función en Native (ej. multi-threading), buscar su equivalente o fallback en WASM (Web Workers).
-5. **Registro**: Documentar incompatibilidades detectadas en `feasibility_report.md`.
+1. **Backend Switch**: Verify that the same `ShardManager` calls work using `fetch` (WASM) and `reqwest` (Native).
+2. **Sandboxing Check**: Confirm that network headers (e.g. Range Requests) do not violate the browser's CORS policies.
+3. **Memory Dynamics (Wasm64)**: When using `wasm64`, the 4 GB limit disappears. Verify that memory allocation is dynamic and that the node can scale according to available system RAM, enabling massive contexts.
+4. **Feature Parity**: If a feature is added in Native (e.g. multi-threading), find its equivalent or fallback in WASM (Web Workers).
+5. **Log**: Document any incompatibilities found in `feasibility_report.md`.
 
-Loxi debe ser agnóstico del entorno de ejecución.
+Loxi must be agnostic of the execution environment.
