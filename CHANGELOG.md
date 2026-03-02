@@ -1,5 +1,26 @@
 # Changelog
 
+## [Unreleased] — 2026-03-02
+
+### Added
+
+- VIP / trusted-partner matching is now live. Set `LOXI_TRUSTED_PARTNERS` to a comma-separated list of node IDs in the orchestrator `.env`; those nodes get Tier 1 priority in the scheduler. Previously the constant was hardcoded empty and the code path never fired.
+- Rate limiting on `POST /logistics/submit-problem`: 20 requests per second per IP with a burst allowance of 5, powered by `governor 0.6`. Requests exceeding the limit receive HTTP 429 with a JSON error body. Read-only routes are unaffected.
+- Parallel auction dispatch: the Logistics Architect now batches all partition auction messages into a single WebSocket flush rather than sending them sequentially, cutting time-to-first-bid for multi-partition jobs.
+- Auction persistence via `sled`. In-flight auctions survive an orchestrator restart — on startup the node reloads all pending auctions from `data/loxi_auctions.db`, clears stale worker assignments, and re-queues the tasks. State is updated on every transition (created, assigned, completed/removed).
+- OPFS matrix caching in the browser worker. Before computing a distance matrix, the worker derives a SHA-256 cache key from the stop list and origin, reads from the Origin Private File System on a hit, and writes back on a miss. Identical problems solved twice skip Valhalla entirely.
+- OPFS quota eviction: after each cache write the worker checks storage utilisation; if usage exceeds 80% it deletes the oldest cache files until usage drops to 70%.
+- Multi-city tile support in `scripts/download_tiles.sh`. Set `LOXI_CITIES` to a comma-separated list of Geofabrik region slugs (e.g. `south-america/argentina-latest,south-america/uruguay-latest`) and the script downloads all PBF files and builds a single Valhalla tile tree covering every region.
+- Playwright E2E test harness at `tests/e2e/`. The smoke test opens two worker tabs, connects both to the grid, dispatches a 10-stop problem, waits for the matrix and VRP steps to complete, and asserts the solution is returned via the API. A new `.github/workflows/e2e.yml` workflow runs it on every pull request.
+- Docker Compose setup (`compose.yml` + `Dockerfile.node`). Running `docker compose up --build` starts the orchestrator/API server and the worker-web Vite dev server with no manual Rust toolchain installation required.
+- GitHub Actions workflow for publishing the SDK to npm. Pushing a `sdk-v*` tag triggers a build and `npm publish --access public` using an `NPM_TOKEN` repository secret.
+
+### Changed
+
+- SDK package renamed from `@loxi/worker-sdk` to `@loxi/worker-device`, aligning the package name with the exported `LoxiWorkerDevice` class. `publishConfig.access` is now set to `"public"` and the `files` field restricts the tarball to `dist/` only.
+
+---
+
 ## [Unreleased] — 2026
 
 ### Added

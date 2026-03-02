@@ -28,6 +28,7 @@
 
 use futures_util::{SinkExt, StreamExt};
 use loxi_core::{Message as LoxiMessage, NodeSpecs, WorkerLease};
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -42,8 +43,10 @@ pub mod scheduler;
 use scheduler::Scheduler;
 pub mod auth;
 use auth::KeyManager;
+mod store;
 use dashmap::DashMap;
 use dotenv::dotenv;
+use store::AuctionStore;
 
 // Global State
 type PeerMap = Arc<DashMap<String, mpsc::Sender<WsMessage>>>;
@@ -52,13 +55,15 @@ type AuthorityRegistry = Arc<DashMap<String, String>>;
 type SharedScheduler = Arc<Mutex<Scheduler>>; // New Brain
 type SharedKeyManager = Arc<KeyManager>; // Security
 type ActiveAuctions = Arc<DashMap<String, AuctionMetadata>>; // Consensus & Tracking
+type SharedStore = Arc<AuctionStore>; // Persistence
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum AuctionCompletionStatus {
     Pending,
     Completed,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AuctionMetadata {
     pub poster_id: String,
     pub consensus_hashes: Vec<String>,
@@ -84,6 +89,28 @@ pub async fn run_server(port: u16, node_count: Arc<AtomicUsize>) {
     let key_manager: SharedKeyManager = Arc::new(KeyManager::new()); // Init Keys
     let active_auctions: ActiveAuctions = Arc::new(DashMap::new());
 
+    let auction_store: SharedStore = Arc::new(
+        AuctionStore::open("data/loxi_auctions.db").expect("Failed to open auction store"),
+    );
+
+    // Reload any in-flight auctions that survived a crash.
+    {
+        let saved = auction_store.load_all();
+        if !saved.is_empty() {
+            println!("♻️  Reloading {} in-flight auction(s) from store...", saved.len());
+            for (id, mut meta) in saved {
+                meta.assigned_worker_id = None; // worker is gone; re-queue
+                auction_store.persist(&id, &meta);
+                let poster_id = meta.poster_id.clone();
+                let original_req = meta.original_req.clone();
+                active_auctions.insert(id.clone(), meta);
+                if let Some(req) = original_req {
+                    scheduler.lock().await.schedule_task(id, req, poster_id);
+                }
+            }
+        }
+    }
+
     // [WATCHDOG] Re-queue tasks whose assigned workers stop responding.
     // Runs every 30s; evicts workers silent for more than 120s.
     {
@@ -92,6 +119,7 @@ pub async fn run_server(port: u16, node_count: Arc<AtomicUsize>) {
 
         let sched_wdog = scheduler.clone();
         let auctions_wdog = active_auctions.clone();
+        let store_wdog = auction_store.clone();
         tokio::spawn(async move {
             let mut interval =
                 tokio::time::interval(tokio::time::Duration::from_secs(CHECK_INTERVAL_SECS));
@@ -131,6 +159,7 @@ pub async fn run_server(port: u16, node_count: Arc<AtomicUsize>) {
                         // Clear the stale assignment so the task can be re-scheduled
                         if let Some(mut meta) = auctions_wdog.get_mut(&task_id) {
                             meta.assigned_worker_id = None;
+                            store_wdog.persist(&task_id, &meta);
                         }
                         // Re-queue; the next free/connecting worker will pick it up
                         sched_wdog.lock().await.schedule_task(task_id.clone(), req, poster_id);
@@ -150,6 +179,7 @@ pub async fn run_server(port: u16, node_count: Arc<AtomicUsize>) {
             scheduler: scheduler.clone(),
             key_manager: key_manager.clone(),
             active_auctions: active_auctions.clone(),
+            auction_store: auction_store.clone(),
             node_count: node_count.clone(),
         };
         tokio::spawn(handle_connection(stream, addr, ctx));
@@ -164,6 +194,7 @@ struct ConnectionCtx {
     scheduler: SharedScheduler,
     key_manager: SharedKeyManager,
     active_auctions: ActiveAuctions,
+    auction_store: SharedStore,
     node_count: Arc<AtomicUsize>,
 }
 
@@ -176,6 +207,7 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
         scheduler,
         key_manager,
         active_auctions,
+        auction_store,
         node_count,
     } = ctx;
     println!("Incoming connection from: {}", addr);
@@ -242,6 +274,7 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                             // [FAULT TOLERANCE] Track who has it
                             if let Some(mut meta) = active_auctions.get_mut(&task_id) {
                                 meta.assigned_worker_id = Some(id.clone());
+                                auction_store.persist(&task_id, &meta);
                             }
 
                             // Resolve Architect Address
@@ -314,6 +347,7 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                         let peers_map = peers_map.clone();
                         let authorities_map = authorities_map.clone();
                         let key_manager = key_manager.clone();
+                        let auction_store = auction_store.clone();
 
                         // NON-BLOCKING DISPATCH
                         tokio::spawn(async move {
@@ -324,22 +358,22 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                             );
 
                             // 1. Register Auction with RECOVERY support (Using UNIQUE task id)
-                            active_auctions.insert(
-                                auction_id.clone(),
-                                AuctionMetadata {
-                                    poster_id: poster_id.clone(),
-                                    consensus_hashes: Vec::new(),
-                                    original_req: Some(requirement.clone()), // Save for later
-                                    assigned_worker_id: None,
-                                    created_at: std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_secs(),
-                                    status: AuctionCompletionStatus::Pending,
-                                },
-                            );
+                            let new_meta = AuctionMetadata {
+                                poster_id: poster_id.clone(),
+                                consensus_hashes: Vec::new(),
+                                original_req: Some(requirement.clone()), // Save for later
+                                assigned_worker_id: None,
+                                created_at: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs(),
+                                status: AuctionCompletionStatus::Pending,
+                            };
+                            auction_store.persist(&auction_id, &new_meta);
+                            active_auctions.insert(auction_id.clone(), new_meta);
 
                             let active_auctions_ref = active_auctions.clone(); // Clone for closure
+                            let auction_store_inner = auction_store.clone();
 
                             // 2. Schedule Task
                             tokio::spawn(async move {
@@ -354,6 +388,7 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                                     if let Some(mut meta) = active_auctions_ref.get_mut(&auction_id)
                                     {
                                         meta.assigned_worker_id = Some(assignment.node_id.clone());
+                                        auction_store_inner.persist(&auction_id, &meta);
                                     }
 
                                     // Send LeaseAssignment to Worker
@@ -401,6 +436,7 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                         let authorities_map = authorities_map.clone();
                         let scheduler = scheduler.clone();
                         let key_manager = key_manager.clone();
+                        let auction_store = auction_store.clone();
 
                         // NON-BLOCKING EVALUATION
                         tokio::spawn(async move {
@@ -412,6 +448,7 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                                     return; // duplicate — ignore
                                 }
                                 meta.status = AuctionCompletionStatus::Completed;
+                                auction_store.remove(&solution.auction_id);
                                 meta.consensus_hashes.push(solution.result_hash.clone());
                                 // Try relaying to the original poster first
                                 auth_tx = authority_peers_map
@@ -465,6 +502,7 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                                     // TRACK ASSIGNMENT IN STATE
                                     if let Some(mut meta) = active_auctions.get_mut(&next_task_id) {
                                         meta.assigned_worker_id = Some(worker_id.clone());
+                                        auction_store.persist(&next_task_id, &meta);
                                     }
 
                                     // Send NEXT Lease
@@ -628,6 +666,7 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                         task_id, id
                     );
                     meta.assigned_worker_id = None;
+                    auction_store.persist(&task_id, &meta);
                     let poster_id = meta.poster_id.clone();
                     drop(meta); // Release entry before scheduling
 

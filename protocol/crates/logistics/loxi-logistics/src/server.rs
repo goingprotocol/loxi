@@ -8,6 +8,25 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use warp::Filter;
 
 #[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+struct TooManyRequests;
+
+#[cfg(not(target_arch = "wasm32"))]
+impl warp::reject::Reject for TooManyRequests {}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn handle_rejection(err: warp::Rejection) -> Result<impl warp::Reply, warp::Rejection> {
+    if err.find::<TooManyRequests>().is_some() {
+        Ok(warp::reply::with_status(
+            warp::reply::json(&serde_json::json!({"error": "rate limit exceeded"})),
+            warp::http::StatusCode::TOO_MANY_REQUESTS,
+        ))
+    } else {
+        Err(err)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn start_artifact_server(
     port: u16,
     artifact_dir: PathBuf,
@@ -18,6 +37,23 @@ pub async fn start_artifact_server(
     node_count: Arc<AtomicUsize>,
 ) {
     let cache_filter = warp::any().map(move || shared_cache.clone());
+
+    // Rate limiter: 20 req/s sustained, burst of 5, keyed by remote IP.
+    // Applied to write endpoints only (submit-problem).
+    let rate_limiter: Arc<governor::DefaultKeyedRateLimiter<std::net::IpAddr>> =
+        Arc::new(governor::RateLimiter::keyed(
+            governor::Quota::per_second(std::num::NonZeroU32::new(20).unwrap())
+                .allow_burst(std::num::NonZeroU32::new(5).unwrap()),
+        ));
+    let rl = rate_limiter.clone();
+    let rate_limit = warp::addr::remote().and_then(move |addr: Option<std::net::SocketAddr>| {
+        let rl = rl.clone();
+        async move {
+            let ip =
+                addr.map(|a| a.ip()).unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+            rl.check_key(&ip).map_err(|_| warp::reject::custom(TooManyRequests))
+        }
+    });
 
     let cors = warp::cors()
         .allow_any_origin()
@@ -43,10 +79,12 @@ pub async fn start_artifact_server(
     // POST /logistics/submit-problem
     let log_submit = warp::path!("logistics" / "submit-problem")
         .and(warp::post())
+        .and(rate_limit)
         .and(warp::body::json())
         .and(cache_filter.clone())
         .map(
-            move |problem: crate::types::Problem,
+            move |_: (),
+                  problem: crate::types::Problem,
                   cache: Arc<dashmap::DashMap<String, crate::types::Problem>>| {
                 println!("📥 API: Received Logistics Problem Submission");
                 let mission_id = uuid::Uuid::new_v4().to_string();
@@ -189,8 +227,12 @@ pub async fn start_artifact_server(
         },
     );
 
-    let api_routes =
-        log_submit.or(log_solution_by_id).or(log_data).or(workers_count_route).with(cors.clone());
+    let api_routes = log_submit
+        .or(log_solution_by_id)
+        .or(log_data)
+        .or(workers_count_route)
+        .with(cors.clone())
+        .recover(handle_rejection);
 
     let logistics_static = warp::path("logistics").and(warp::fs::dir(artifact_dir)).with(cors);
 
