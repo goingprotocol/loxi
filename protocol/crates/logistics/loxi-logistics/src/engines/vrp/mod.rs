@@ -38,7 +38,7 @@ impl VrpSolver {
         let config = VrpConfigBuilder::new(core_problem.clone())
             .prebuild()
             .map_err(|e| format!("Failed to prebuild solver config: {}", e))?
-            // .with_max_time(Some(2)) // Try 2s limit
+            .with_max_time(Some(60))
             // .with_max_generations(Some(10)) // Force max 10 generations for speed
             .build()
             .map_err(|e| format!("Failed to build solver config: {}", e))?;

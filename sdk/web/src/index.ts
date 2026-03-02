@@ -313,15 +313,11 @@ export class LoxiWorkerDevice {
             const finalPayload = payload as string;
 
             this.addLog(`📥 Data Payload Ready (${finalPayload.length} bytes)`, "info");
-            console.log("DEBUG: responseMsg", responseMsg);
-            console.log("DEBUG: extracted payload", payload);
-            console.log("DEBUG: finalPayload", finalPayload);
 
             // 2. ARTIFACT RESOLUTION & EXECUTION via WORKER
             const taskStart = performance.now();
             const affinityArtifact = lease.affinities?.find(a => a.startsWith("loxi_")) || "unknown";
             this.addLog(`🚀 Launching Worker for: ${affinityArtifact}`, "action");
-            console.log("DEBUG: archAddr", archAddr);
 
             let archBase = "";
             try {
@@ -424,6 +420,17 @@ export class LoxiWorkerDevice {
 
             worker.terminate();
             URL.revokeObjectURL(blobUrl);
+
+            // Update affinity cache
+            if (this.specs && !this.specs.affinity_hashes.includes(affinityArtifact)) {
+                this.specs.affinity_hashes = [...this.specs.affinity_hashes, affinityArtifact];
+                try {
+                    localStorage.setItem('loxi_affinities', JSON.stringify(this.specs.affinity_hashes));
+                } catch (_) {}
+                // Re-register with updated specs so orchestrator knows about new affinity
+                this.ws?.send(JSON.stringify({ RegisterNode: this.specs }));
+                this.addLog(`♻️ Registered affinity: ${affinityArtifact}`, 'info');
+            }
 
             this.addLog(`✅ Worker Execution Complete`, "success");
 

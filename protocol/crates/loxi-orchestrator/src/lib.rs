@@ -266,12 +266,15 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                                     affinities: next_affinities,
                                     metadata: next_metadata,
                                 };
-                                let _ = worker_tx
-                                    .send(WsMessage::Text(
-                                        serde_json::to_string(&LoxiMessage::LeaseAssignment(lease))
-                                            .unwrap(),
-                                    ))
-                                    .await;
+                                if let Ok(json) =
+                                    serde_json::to_string(&LoxiMessage::LeaseAssignment(lease))
+                                {
+                                    let _ = worker_tx.send(WsMessage::Text(json)).await;
+                                } else {
+                                    eprintln!(
+                                        "⚠️ Orchestrator: failed to serialise message — dropping"
+                                    );
+                                }
                             }
                         }
                     }
@@ -376,14 +379,13 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                                             affinities: requirement.affinities.clone(),
                                             metadata: requirement.metadata.clone(),
                                         };
-                                        let _ = worker_tx
-                                            .send(WsMessage::Text(
-                                                serde_json::to_string(
-                                                    &LoxiMessage::LeaseAssignment(lease),
-                                                )
-                                                .unwrap(),
-                                            ))
-                                            .await;
+                                        if let Ok(json) = serde_json::to_string(
+                                            &LoxiMessage::LeaseAssignment(lease),
+                                        ) {
+                                            let _ = worker_tx.send(WsMessage::Text(json)).await;
+                                        } else {
+                                            eprintln!("⚠️ Orchestrator: failed to serialise message — dropping");
+                                        }
                                     }
                                 }
                             });
@@ -427,14 +429,15 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                             }
 
                             if let Some(tx) = auth_tx {
-                                let _ = tx
-                                    .send(WsMessage::Text(
-                                        serde_json::to_string(&LoxiMessage::SubmitSolution(
-                                            solution.clone(),
-                                        ))
-                                        .unwrap(),
-                                    ))
-                                    .await;
+                                if let Ok(json) = serde_json::to_string(
+                                    &LoxiMessage::SubmitSolution(solution.clone()),
+                                ) {
+                                    let _ = tx.send(WsMessage::Text(json)).await;
+                                } else {
+                                    eprintln!(
+                                        "⚠️ Orchestrator: failed to serialise message — dropping"
+                                    );
+                                }
                             }
 
                             let worker_id = solution.worker_id.clone();
@@ -486,14 +489,13 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                                             affinities: next_affinities,
                                             metadata: next_metadata,
                                         };
-                                        let _ = worker_tx
-                                            .send(WsMessage::Text(
-                                                serde_json::to_string(
-                                                    &LoxiMessage::LeaseAssignment(lease),
-                                                )
-                                                .unwrap(),
-                                            ))
-                                            .await;
+                                        if let Ok(json) = serde_json::to_string(
+                                            &LoxiMessage::LeaseAssignment(lease),
+                                        ) {
+                                            let _ = worker_tx.send(WsMessage::Text(json)).await;
+                                        } else {
+                                            eprintln!("⚠️ Orchestrator: failed to serialise message — dropping");
+                                        }
                                     }
                                 }
                             }
@@ -517,23 +519,26 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                                 .collect();
 
                             let mut sent_count = 0;
-                            let msg_text = serde_json::to_string(&LoxiMessage::NotifyOwner {
+                            if let Ok(msg_text) = serde_json::to_string(&LoxiMessage::NotifyOwner {
                                 owner_id: owner_id.clone(),
                                 notify_type: notify_type.clone(),
                                 payload: payload.clone(),
                                 metadata: metadata.clone(),
-                            })
-                            .unwrap();
+                            }) {
+                                for tx in target_peers {
+                                    let _ = tx.send(WsMessage::Text(msg_text.clone())).await;
+                                    sent_count += 1;
+                                }
 
-                            for tx in target_peers {
-                                let _ = tx.send(WsMessage::Text(msg_text.clone())).await;
-                                sent_count += 1;
-                            }
-
-                            // 2. Also check Authority Peers (if they register with the same ID)
-                            if let Some(tx) = authority_peers_map.get(&owner_id) {
-                                let _ = tx.value().send(WsMessage::Text(msg_text)).await;
-                                sent_count += 1;
+                                // 2. Also check Authority Peers (if they register with the same ID)
+                                if let Some(tx) = authority_peers_map.get(&owner_id) {
+                                    let _ = tx.value().send(WsMessage::Text(msg_text)).await;
+                                    sent_count += 1;
+                                }
+                            } else {
+                                eprintln!(
+                                    "⚠️ Orchestrator: failed to serialise message — dropping"
+                                );
                             }
 
                             println!(
@@ -553,16 +558,19 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                             let worker_tx_opt =
                                 peers_map.get(&worker_id).map(|p| p.value().clone());
                             if let Some(tx) = worker_tx_opt {
-                                let _ = tx
-                                    .send(WsMessage::Text(
-                                        serde_json::to_string(&LoxiMessage::RevealRequest {
-                                            auction_id,
-                                            worker_id,
-                                            destination,
-                                        })
-                                        .unwrap(),
-                                    ))
-                                    .await;
+                                if let Ok(json) =
+                                    serde_json::to_string(&LoxiMessage::RevealRequest {
+                                        auction_id,
+                                        worker_id,
+                                        destination,
+                                    })
+                                {
+                                    let _ = tx.send(WsMessage::Text(json)).await;
+                                } else {
+                                    eprintln!(
+                                        "⚠️ Orchestrator: failed to serialise message — dropping"
+                                    );
+                                }
                             }
                         });
                     }
@@ -570,16 +578,17 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
                         let peers_map = peers_map.clone();
                         tokio::spawn(async move {
                             if let Some(tx) = peers_map.get(&target_id).map(|p| p.value().clone()) {
-                                let _ = tx
-                                    .send(WsMessage::Text(
-                                        serde_json::to_string(&LoxiMessage::Signal {
-                                            from_id,
-                                            target_id,
-                                            payload,
-                                        })
-                                        .unwrap(),
-                                    ))
-                                    .await;
+                                if let Ok(json) = serde_json::to_string(&LoxiMessage::Signal {
+                                    from_id,
+                                    target_id,
+                                    payload,
+                                }) {
+                                    let _ = tx.send(WsMessage::Text(json)).await;
+                                } else {
+                                    eprintln!(
+                                        "⚠️ Orchestrator: failed to serialise message — dropping"
+                                    );
+                                }
                             }
                         });
                     }
