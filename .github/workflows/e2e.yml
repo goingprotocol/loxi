@@ -39,11 +39,20 @@ jobs:
           npx playwright install chromium --with-deps
         working-directory: tests/e2e
 
+      - name: Generate RSA keypair for CI
+        run: |
+          openssl genrsa -out /tmp/loxi_priv.pem 2048 2>/dev/null
+          openssl rsa -in /tmp/loxi_priv.pem -pubout -out /tmp/loxi_pub.pem 2>/dev/null
+          PRIV=$(awk '{printf "%s\\n",$0}' /tmp/loxi_priv.pem)
+          PUB=$(awk '{printf "%s\\n",$0}' /tmp/loxi_pub.pem)
+          mkdir -p protocol/crates/loxi-orchestrator
+          printf 'RSA_PRIVATE_KEY=%s\n' "$PRIV" > protocol/crates/loxi-orchestrator/.env
+          printf 'RSA_PUBLIC_KEY=%s\n'  "$PUB"  >> protocol/crates/loxi-orchestrator/.env
+
       - name: Start Loxi node (background)
-        run: bash scripts/run_node.sh > /tmp/loxi-node.log 2>&1 &
-        env:
-          RSA_PRIVATE_KEY: ${{ secrets.RSA_PRIVATE_KEY }}
-          RSA_PUBLIC_KEY: ${{ secrets.RSA_PUBLIC_KEY }}
+        run: |
+          bash scripts/run_node.sh > /tmp/loxi-node.log 2>&1 &
+          echo $! > /tmp/loxi-node.pid
 
       - name: Start worker-web (background)
         run: npm run dev -- --host > /tmp/worker-web.log 2>&1 &
@@ -51,10 +60,26 @@ jobs:
 
       - name: Wait for services
         run: |
-          echo "Waiting for orchestrator..."
-          timeout 60 bash -c 'until curl -sf http://localhost:8080/workers/count; do sleep 2; done'
-          echo "Waiting for worker-web..."
-          timeout 90 bash -c 'until curl -sf http://localhost:5173; do sleep 2; done'
+          LOXI_PID=$(cat /tmp/loxi-node.pid)
+          echo "Waiting for orchestrator (port 8080, pid=$LOXI_PID)..."
+          n=0
+          until curl -sf http://localhost:8080/workers/count > /dev/null; do
+            n=$((n+1))
+            if [ $n -ge 30 ]; then
+              echo "Orchestrator not ready after 60s — log:"
+              cat /tmp/loxi-node.log
+              exit 1
+            fi
+            if ! kill -0 "$LOXI_PID" 2>/dev/null; then
+              echo "loxi-node exited prematurely — log:"
+              cat /tmp/loxi-node.log
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "Orchestrator ready."
+          echo "Waiting for worker-web (port 5173)..."
+          timeout 90 bash -c 'until curl -sf http://localhost:5173 > /dev/null; do sleep 2; done'
 
       - name: Dump service logs on failure
         if: failure()
