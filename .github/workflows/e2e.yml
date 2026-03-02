@@ -40,13 +40,13 @@ jobs:
         working-directory: tests/e2e
 
       - name: Start Loxi node (background)
-        run: bash scripts/run_node.sh &
+        run: bash scripts/run_node.sh > /tmp/loxi-node.log 2>&1 &
         env:
           RSA_PRIVATE_KEY: ${{ secrets.RSA_PRIVATE_KEY }}
           RSA_PUBLIC_KEY: ${{ secrets.RSA_PUBLIC_KEY }}
 
       - name: Start worker-web (background)
-        run: npm run dev -- --host &
+        run: npm run dev -- --host > /tmp/worker-web.log 2>&1 &
         working-directory: apps/worker-web
 
       - name: Wait for services
@@ -55,6 +55,12 @@ jobs:
           timeout 60 bash -c 'until curl -sf http://localhost:8080/workers/count; do sleep 2; done'
           echo "Waiting for worker-web..."
           timeout 90 bash -c 'until curl -sf http://localhost:5173; do sleep 2; done'
+
+      - name: Dump service logs on failure
+        if: failure()
+        run: |
+          echo "=== loxi-node ===" && cat /tmp/loxi-node.log || true
+          echo "=== worker-web ===" && cat /tmp/worker-web.log || true
 
       - name: Run E2E tests
         run: npm run test:e2e
