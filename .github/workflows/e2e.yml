@@ -46,8 +46,8 @@ jobs:
           PRIV=$(awk '{printf "%s\\n",$0}' /tmp/loxi_priv.pem)
           PUB=$(awk '{printf "%s\\n",$0}' /tmp/loxi_pub.pem)
           mkdir -p protocol/crates/loxi-orchestrator
-          printf 'RSA_PRIVATE_KEY=%s\n' "$PRIV" > protocol/crates/loxi-orchestrator/.env
-          printf 'RSA_PUBLIC_KEY=%s\n'  "$PUB"  >> protocol/crates/loxi-orchestrator/.env
+          printf "RSA_PRIVATE_KEY='%s'\n" "$PRIV" > protocol/crates/loxi-orchestrator/.env
+          printf "RSA_PUBLIC_KEY='%s'\n"  "$PUB"  >> protocol/crates/loxi-orchestrator/.env
 
       - name: Start Loxi node (background)
         run: |
