@@ -216,12 +216,10 @@ impl Scheduler {
         let mut buffer = Vec::new();
         let mut selected_node: Option<WorkerNode> = None;
 
-        // --- DEBUG PROBE START ---
         println!(
             "🔎 Scheduler: Scanning pool for Task {} (Affinities: {:?})",
             req.id, req.affinities
         );
-        // --- DEBUG PROBE END ---
 
         // 1. Gather Candidates (Top K)
         while buffer.len() < SEARCH_DEPTH {

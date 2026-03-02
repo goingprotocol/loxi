@@ -348,7 +348,7 @@ export class LoxiWorkerDevice {
             else if (affinityArtifact.includes("vrp")) taskType = 'SOLVE_VRP';
             else if (affinityArtifact.includes("partitioner")) taskType = 'PARTITION_PROBLEM';
 
-            this.addLog(`👷 Spawning Agnostic Worker from ${workerUrl}`, "info");
+            this.addLog(`👷 Spawning ${taskType} worker: ${workerUrl}`, "info");
 
             // Cross-Origin Shim:
             // Chrome/Safari/Firefox don't allow 'new Worker(remoteUrl)' across origins.
