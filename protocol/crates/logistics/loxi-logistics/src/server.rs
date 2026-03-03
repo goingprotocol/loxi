@@ -33,7 +33,7 @@ pub async fn start_artifact_server(
     job_tx: tokio::sync::mpsc::UnboundedSender<crate::architect::LogisticsJob>,
     protocol_tx: tokio::sync::mpsc::UnboundedSender<loxi_core::Message>,
     shared_cache: Arc<dashmap::DashMap<String, crate::types::Problem>>,
-    verify_ticket: Arc<dyn Fn(&str) -> Option<(String, String)> + Send + Sync>,
+    verify_ticket: crate::VerifyFn,
     node_count: Arc<AtomicUsize>,
 ) {
     let cache_filter = warp::any().map(move || shared_cache.clone());

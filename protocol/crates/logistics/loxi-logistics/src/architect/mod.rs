@@ -53,7 +53,7 @@ pub struct LogisticsArchitect {
     pub pending_bids: dashmap::DashMap<String, Vec<loxi_core::Solution>>, // AuctionID -> List of Candidates
     pub expected_results: dashmap::DashMap<String, usize>, // AuctionID -> Total Workers Assigned
     pub mission_roots: dashmap::DashMap<String, String>,   // MissionID -> RootProblemID
-    pub verify_fn: Arc<dyn Fn(&str) -> Option<(String, String)> + Send + Sync>,
+    pub verify_fn: crate::VerifyFn,
     pub problem_timestamps: dashmap::DashMap<String, std::time::Instant>,
 }
 
@@ -79,7 +79,7 @@ impl LogisticsArchitect {
         orchestrator_url: &str,
         domain_id: &str,
         shared_cache: Arc<dashmap::DashMap<String, types::Problem>>,
-        verify_fn: Arc<dyn Fn(&str) -> Option<(String, String)> + Send + Sync>,
+        verify_fn: crate::VerifyFn,
     ) -> Self {
         Self {
             domain_id: domain_id.to_string(),
@@ -105,7 +105,7 @@ impl LogisticsArchitect {
         mut job_rx: tokio::sync::mpsc::UnboundedReceiver<LogisticsJob>,
         mut protocol_rx: tokio::sync::mpsc::UnboundedReceiver<loxi_core::Message>,
         shared_cache: Arc<dashmap::DashMap<String, types::Problem>>,
-        verify_fn: Arc<dyn Fn(&str) -> Option<(String, String)> + Send + Sync>,
+        verify_fn: crate::VerifyFn,
     ) {
         use futures_util::{SinkExt, StreamExt};
         use tokio_tungstenite::connect_async;
@@ -119,12 +119,8 @@ impl LogisticsArchitect {
 
         let (mut write, mut read) = ws_stream.split();
         // Use tokio::sync::Mutex so the event loop never blocks a thread while waiting.
-        let manager = Arc::new(Mutex::new(Self::new(
-            orchestrator_url,
-            domain_id,
-            shared_cache,
-            verify_fn,
-        )));
+        let manager =
+            Arc::new(Mutex::new(Self::new(orchestrator_url, domain_id, shared_cache, verify_fn)));
 
         // 1. REGISTER
         let reg_msg = {
@@ -142,8 +138,7 @@ impl LogisticsArchitect {
         {
             let evict_manager = manager.clone();
             tokio::spawn(async move {
-                let mut interval =
-                    tokio::time::interval(tokio::time::Duration::from_secs(600));
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(600));
                 loop {
                     interval.tick().await;
                     let cutoff = std::time::Duration::from_secs(7200); // 2 hours
@@ -168,7 +163,10 @@ impl LogisticsArchitect {
                         evicted += 1;
                     }
                     if evicted > 0 {
-                        println!("🧹 Eviction: removed {} completed problems older than 2h", evicted);
+                        println!(
+                            "🧹 Eviction: removed {} completed problems older than 2h",
+                            evicted
+                        );
                     }
                 }
             });
@@ -769,10 +767,7 @@ impl LogisticsArchitect {
                         return vec![];
                     }
                     None => {
-                        eprintln!(
-                            "⚠️ PushSolution rejected: invalid ticket for {}",
-                            auction_id
-                        );
+                        eprintln!("⚠️ PushSolution rejected: invalid ticket for {}", auction_id);
                         return vec![];
                     }
                 }
@@ -812,10 +807,7 @@ impl LogisticsArchitect {
         let role = match self.pending_problems.get(&auction_id) {
             Some(p) => p.role.clone(),
             None => {
-                eprintln!(
-                    "⚠️ process_solution: unknown auction_id '{}' — dropping",
-                    auction_id
-                );
+                eprintln!("⚠️ process_solution: unknown auction_id '{}' — dropping", auction_id);
                 return Vec::new();
             }
         };

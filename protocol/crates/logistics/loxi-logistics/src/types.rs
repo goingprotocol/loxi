@@ -365,10 +365,7 @@ impl Problem {
                     return Err(format!("Fleet vehicle '{}': count must be > 0", fv.type_id));
                 }
                 if fv.capacity <= 0.0 {
-                    return Err(format!(
-                        "Fleet vehicle '{}': capacity must be > 0",
-                        fv.type_id
-                    ));
+                    return Err(format!("Fleet vehicle '{}': capacity must be > 0", fv.type_id));
                 }
                 if fv.capacity.fract() != 0.0 {
                     eprintln!(

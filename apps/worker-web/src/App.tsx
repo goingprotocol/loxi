@@ -418,7 +418,7 @@ function App() {
     if (format === 'csv') {
       const rows = ['route_id,stop_id,lat,lon,order'];
       currentRoutes.forEach((route, ri) => {
-        route.forEach((stopId, order) => {
+        route.forEach((stopId: string, order: number) => {
           const stop = stopMap.get(stopId) as any;
           if (stop) rows.push(`${ri + 1},${stopId},${fromE6(stop.location.lat)},${fromE6(stop.location.lon)},${order + 1}`);
         });
@@ -427,10 +427,10 @@ function App() {
     } else {
       const features: any[] = [];
       currentRoutes.forEach((route, ri) => {
-        const coords = route.map(id => stopMap.get(id) as any).filter(Boolean)
+        const coords = route.map((id: string) => stopMap.get(id) as any).filter(Boolean)
           .map((s: any) => [fromE6(s.location.lon), fromE6(s.location.lat)]);
         if (coords.length > 1) features.push({ type: 'Feature', properties: { route_id: ri + 1 }, geometry: { type: 'LineString', coordinates: coords } });
-        route.forEach((stopId, order) => {
+        route.forEach((stopId: string, order: number) => {
           const stop = stopMap.get(stopId) as any;
           if (stop) features.push({ type: 'Feature', properties: { stop_id: stopId, route_id: ri + 1, order: order + 1 }, geometry: { type: 'Point', coordinates: [fromE6(stop.location.lon), fromE6(stop.location.lat)] } });
         });

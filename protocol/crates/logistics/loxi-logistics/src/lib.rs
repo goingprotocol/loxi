@@ -5,6 +5,10 @@ pub mod engines;
 pub mod server;
 pub mod types;
 
+/// Ticket-verification callback: returns `Some((sub, aud))` on success.
+#[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
+pub type VerifyFn = std::sync::Arc<dyn Fn(&str) -> Option<(String, String)> + Send + Sync>;
+
 use crate::types::{Problem, Solution};
 use loxi_wasm_sdk::LoxiArtifact;
 

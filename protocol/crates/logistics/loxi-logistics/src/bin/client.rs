@@ -40,7 +40,7 @@ async fn main() {
 
     // 1. Initialize Internal Logistics Architect
     let shared_cache = std::sync::Arc::new(dashmap::DashMap::new());
-    let no_op_verify: std::sync::Arc<dyn Fn(&str) -> Option<(String, String)> + Send + Sync> =
+    let no_op_verify: loxi_logistics::VerifyFn =
         std::sync::Arc::new(|_ticket: &str| Some(("".to_string(), "".to_string())));
     let manager = LogisticsArchitect::new(&connect_addr, DOMAIN_ID, shared_cache, no_op_verify);
     let manager_arc = std::sync::Arc::new(tokio::sync::Mutex::new(manager));

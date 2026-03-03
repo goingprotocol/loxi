@@ -186,9 +186,7 @@ impl VrpSolver {
             } else {
                 vec![pragmatic_problem::VehicleType {
                     type_id: "default_vehicle".to_string(),
-                    vehicle_ids: (1..=problem.fleet_size)
-                        .map(|i| format!("v{}", i))
-                        .collect(),
+                    vehicle_ids: (1..=problem.fleet_size).map(|i| format!("v{}", i)).collect(),
                     profile: pragmatic_problem::VehicleProfile {
                         matrix: "main_matrix".to_string(),
                         scale: None,

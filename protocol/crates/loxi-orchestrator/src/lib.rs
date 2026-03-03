@@ -248,10 +248,7 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
             let text = msg.to_string();
 
             if text.len() > 1_048_576 {
-                eprintln!(
-                    "⚠️ Orchestrator: oversized message ({} bytes) — dropping",
-                    text.len()
-                );
+                eprintln!("⚠️ Orchestrator: oversized message ({} bytes) — dropping", text.len());
                 continue;
             }
 
