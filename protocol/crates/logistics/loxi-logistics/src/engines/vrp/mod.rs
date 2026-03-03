@@ -70,8 +70,8 @@ impl VrpSolver {
     fn to_pragmatic(
         problem: &LoxiProblem,
     ) -> Result<(pragmatic_problem::Problem, Vec<pragmatic_problem::Matrix>), String> {
-        if problem.distance_matrix.is_none() && problem.time_matrix.is_none() {
-            return Err("Business Rule Violation: Matrix is required for VRP solving. Haversine fallback is disabled.".to_string());
+        if problem.distance_matrix.is_none() || problem.time_matrix.is_none() {
+            return Err("Business Rule Violation: Both distance and time matrices are required for VRP solving. Haversine fallback is disabled.".to_string());
         }
 
         // 🟢 1. Collect all Unique Matrix Indices used in this problem
@@ -120,7 +120,7 @@ impl VrpSolver {
                         ]]),
                         tag: None,
                     }],
-                    demand: Some(vec![stop.demand as i32]),
+                    demand: Some(vec![stop.demand.round() as i32]),
                     order: None,
                 }]),
                 replacements: None,
@@ -177,7 +177,7 @@ impl VrpSolver {
                                 reloads: None,
                                 recharges: None,
                             }],
-                            capacity: vec![fv.capacity as i32],
+                            capacity: vec![fv.capacity.round() as i32],
                             skills: None,
                             limits: None,
                         }
@@ -218,7 +218,7 @@ impl VrpSolver {
                         reloads: None,
                         recharges: None,
                     }],
-                    capacity: vec![problem.vehicle.capacity as i32],
+                    capacity: vec![problem.vehicle.capacity.round() as i32],
                     skills: None,
                     limits: None,
                 }]
@@ -319,12 +319,25 @@ impl VrpSolver {
     }
 
     fn format_time(seconds: u32) -> String {
-        let days = seconds / 86400;
-        let rem = seconds % 86400;
-        let hours = rem / 3600;
-        let minutes = (rem % 3600) / 60;
-        let secs = rem % 60;
-
-        format!("2026-01-{:02}T{:02}:{:02}:{:02}Z", 1 + days, hours, minutes, secs)
+        // Base epoch: 2025-01-01T00:00:00Z = 1_735_689_600 unix seconds
+        const EPOCH_OFFSET: u64 = 1_735_689_600;
+        let unix = EPOCH_OFFSET + seconds as u64;
+        let days_since_epoch = unix / 86400;
+        let time_of_day = unix % 86400;
+        let h = time_of_day / 3600;
+        let min = (time_of_day % 3600) / 60;
+        let s = time_of_day % 60;
+        // Proleptic Gregorian calendar (Fliegel-Van Flandern algorithm)
+        let z = days_since_epoch + 719468;
+        let era = z / 146097;
+        let doe = z % 146097;
+        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        let year = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = if mp < 10 { mp + 3 } else { mp - 9 };
+        let year = if month <= 2 { year + 1 } else { year };
+        format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, day, h, min, s)
     }
 }

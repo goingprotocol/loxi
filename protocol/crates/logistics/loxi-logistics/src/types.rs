@@ -337,12 +337,27 @@ impl Problem {
             if stop.demand < 0.0 {
                 return Err(format!("Stop {}: demand must be >= 0", stop.id));
             }
+            if stop.demand.fract() != 0.0 {
+                eprintln!(
+                    "⚠️ Stop '{}': demand {:.4} has fractional part — rounded to {}",
+                    stop.id,
+                    stop.demand,
+                    stop.demand.round() as i32
+                );
+            }
             if stop.location.lat.abs() > 90.0 || stop.location.lon.abs() > 180.0 {
                 return Err(format!(
                     "Stop {}: invalid coordinates ({}, {})",
                     stop.id, stop.location.lat, stop.location.lon
                 ));
             }
+        }
+        if self.vehicle.capacity.fract() != 0.0 {
+            eprintln!(
+                "⚠️ vehicle.capacity {:.4} has fractional part — rounded to {}",
+                self.vehicle.capacity,
+                self.vehicle.capacity.round() as i32
+            );
         }
         if let Some(ref fleet) = self.fleet {
             for fv in fleet {
@@ -354,6 +369,14 @@ impl Problem {
                         "Fleet vehicle '{}': capacity must be > 0",
                         fv.type_id
                     ));
+                }
+                if fv.capacity.fract() != 0.0 {
+                    eprintln!(
+                        "⚠️ Fleet vehicle '{}': capacity {:.4} has fractional part — rounded to {}",
+                        fv.type_id,
+                        fv.capacity,
+                        fv.capacity.round() as i32
+                    );
                 }
             }
         }

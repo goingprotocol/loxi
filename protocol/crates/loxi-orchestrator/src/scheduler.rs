@@ -58,6 +58,8 @@ pub struct Scheduler {
     busy_nodes: HashMap<String, Assignment>,
     // WATCHDOG: When each worker was assigned (for timeout enforcement)
     busy_timestamps: HashMap<String, Instant>,
+    // REVERSE INDEX: O(1) lookup of which auction a worker is handling
+    pub worker_to_auction: HashMap<String, String>,
 }
 
 impl Default for Scheduler {
@@ -73,6 +75,7 @@ impl Scheduler {
             task_queue: VecDeque::new(),
             busy_nodes: HashMap::new(),
             busy_timestamps: HashMap::new(),
+            worker_to_auction: HashMap::new(),
         }
     }
 
@@ -123,6 +126,7 @@ impl Scheduler {
             let assignment =
                 Assignment { node_id: worker.id.clone(), task_type: req.task_type.clone() };
             self.busy_timestamps.insert(assignment.node_id.clone(), Instant::now());
+            self.worker_to_auction.insert(worker.id.clone(), task_id.clone());
             self.busy_nodes.insert(worker.id, assignment.clone());
             Some(assignment)
         } else {
@@ -137,6 +141,7 @@ impl Scheduler {
         // 1. Mark as free (remove from busy)
         self.busy_nodes.remove(worker_id);
         self.busy_timestamps.remove(worker_id);
+        self.worker_to_auction.remove(worker_id);
 
         // 2. SMART PIPE: Scan queue for FIRST compatible task
         if let Some(match_result) = self.try_match_pending(&original_specs) {
@@ -198,6 +203,7 @@ impl Scheduler {
         let metadata = req.metadata.clone();
         let assignment = Assignment { node_id: specs.id.clone(), task_type: req.task_type };
         self.busy_timestamps.insert(specs.id.clone(), Instant::now());
+        self.worker_to_auction.insert(specs.id.clone(), task_id.clone());
         self.busy_nodes.insert(specs.id.clone(), assignment.clone());
         Some((assignment, task_id, posted_by, affinities, metadata))
     }
@@ -212,7 +218,7 @@ impl Scheduler {
         // 4. Scan Buffer for Generic Match (Tier 3 - Strict)
         // 5. Restore unselected to Heap
 
-        const SEARCH_DEPTH: usize = 5;
+        const SEARCH_DEPTH: usize = 20;
         let mut buffer = Vec::new();
         let mut selected_node: Option<WorkerNode> = None;
 
@@ -332,9 +338,10 @@ impl Scheduler {
     }
 
     /// Removes workers whose assignments have exceeded `timeout` from the busy
-    /// tracking maps and returns their IDs so the caller can re-queue their tasks.
+    /// tracking maps and returns `(worker_id, auction_id)` pairs so the caller
+    /// can re-queue their tasks via the O(1) reverse index.
     /// The worker is NOT returned to the idle pool — its actual state is unknown.
-    pub fn drain_expired(&mut self, timeout: Duration) -> Vec<String> {
+    pub fn drain_expired(&mut self, timeout: Duration) -> Vec<(String, Option<String>)> {
         let expired: Vec<String> = self
             .busy_timestamps
             .iter()
@@ -342,11 +349,14 @@ impl Scheduler {
             .map(|(id, _)| id.clone())
             .collect();
 
-        for id in &expired {
-            self.busy_nodes.remove(id);
-            self.busy_timestamps.remove(id);
-        }
-
         expired
+            .into_iter()
+            .map(|id| {
+                let auction_id = self.worker_to_auction.remove(&id);
+                self.busy_nodes.remove(&id);
+                self.busy_timestamps.remove(&id);
+                (id, auction_id)
+            })
+            .collect()
     }
 }

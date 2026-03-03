@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
 use std::sync::Arc;
 #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
 use uuid;
 
@@ -53,7 +53,8 @@ pub struct LogisticsArchitect {
     pub pending_bids: dashmap::DashMap<String, Vec<loxi_core::Solution>>, // AuctionID -> List of Candidates
     pub expected_results: dashmap::DashMap<String, usize>, // AuctionID -> Total Workers Assigned
     pub mission_roots: dashmap::DashMap<String, String>,   // MissionID -> RootProblemID
-    pub verify_fn: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    pub verify_fn: Arc<dyn Fn(&str) -> Option<(String, String)> + Send + Sync>,
+    pub problem_timestamps: dashmap::DashMap<String, std::time::Instant>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -78,7 +79,7 @@ impl LogisticsArchitect {
         orchestrator_url: &str,
         domain_id: &str,
         shared_cache: Arc<dashmap::DashMap<String, types::Problem>>,
-        verify_fn: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+        verify_fn: Arc<dyn Fn(&str) -> Option<(String, String)> + Send + Sync>,
     ) -> Self {
         Self {
             domain_id: domain_id.to_string(),
@@ -92,6 +93,7 @@ impl LogisticsArchitect {
             expected_results: dashmap::DashMap::new(),
             mission_roots: dashmap::DashMap::new(),
             verify_fn,
+            problem_timestamps: dashmap::DashMap::new(),
         }
     }
 
@@ -103,7 +105,7 @@ impl LogisticsArchitect {
         mut job_rx: tokio::sync::mpsc::UnboundedReceiver<LogisticsJob>,
         mut protocol_rx: tokio::sync::mpsc::UnboundedReceiver<loxi_core::Message>,
         shared_cache: Arc<dashmap::DashMap<String, types::Problem>>,
-        verify_fn: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+        verify_fn: Arc<dyn Fn(&str) -> Option<(String, String)> + Send + Sync>,
     ) {
         use futures_util::{SinkExt, StreamExt};
         use tokio_tungstenite::connect_async;
@@ -116,10 +118,8 @@ impl LogisticsArchitect {
         println!("✅ Connected to Orchestrator!");
 
         let (mut write, mut read) = ws_stream.split();
-        // LogisticsArchitect itself is protected by a Mutex (async one for the loop)
-        // We use std::sync::Mutex to match the shared cache type, even though we are in async context.
-        // This blocks the thread briefly, which is acceptable for this logic.
-        let manager = Arc::new(std::sync::Mutex::new(Self::new(
+        // Use tokio::sync::Mutex so the event loop never blocks a thread while waiting.
+        let manager = Arc::new(Mutex::new(Self::new(
             orchestrator_url,
             domain_id,
             shared_cache,
@@ -128,7 +128,7 @@ impl LogisticsArchitect {
 
         // 1. REGISTER
         let reg_msg = {
-            let m = manager.lock().unwrap();
+            let m = manager.lock().await;
             m.generate_registration_message(authority_ws_url)
         };
         write
@@ -137,6 +137,42 @@ impl LogisticsArchitect {
             ))
             .await
             .expect("Failed to register");
+
+        // 2a. EVICTION TASK — purge completed problems older than 2 hours every 10 minutes
+        {
+            let evict_manager = manager.clone();
+            tokio::spawn(async move {
+                let mut interval =
+                    tokio::time::interval(tokio::time::Duration::from_secs(600));
+                loop {
+                    interval.tick().await;
+                    let cutoff = std::time::Duration::from_secs(7200); // 2 hours
+                    let mut evicted = 0usize;
+                    let mgr = evict_manager.lock().await;
+                    let stale_ids: Vec<String> = mgr
+                        .problem_timestamps
+                        .iter()
+                        .filter(|e| {
+                            e.value().elapsed() > cutoff
+                                && mgr
+                                    .pending_problems
+                                    .get(e.key())
+                                    .map(|p| p.solution.is_some())
+                                    .unwrap_or(false)
+                        })
+                        .map(|e| e.key().clone())
+                        .collect();
+                    for id in stale_ids {
+                        mgr.pending_problems.remove(&id);
+                        mgr.problem_timestamps.remove(&id);
+                        evicted += 1;
+                    }
+                    if evicted > 0 {
+                        println!("🧹 Eviction: removed {} completed problems older than 2h", evicted);
+                    }
+                }
+            });
+        }
 
         // 2. EVENT LOOP (Unified Select)
         loop {
@@ -147,24 +183,30 @@ impl LogisticsArchitect {
                         Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {
                             if let Ok(loxi_msg) = serde_json::from_str::<LoxiMessage>(&text) {
                                 let responses = {
-                                    let mut m = manager.lock().unwrap();
+                                    let mut m = manager.lock().await;
                                     m.handle_incoming_message(loxi_msg)
                                 };
 
                                 for resp in responses {
-                                    let json = serde_json::to_string(&resp).unwrap();
-                                    write
+                                    let Ok(json) = serde_json::to_string(&resp) else { continue; };
+                                    if let Err(e) = write
                                         .send(tokio_tungstenite::tungstenite::Message::Text(json))
                                         .await
-                                        .expect("Failed to send response");
+                                    {
+                                        eprintln!("⚠️ Architect: failed to send response: {}", e);
+                                        break;
+                                    }
                                 }
                             }
                         }
                         Ok(tokio_tungstenite::tungstenite::Message::Ping(data)) => {
-                            write
+                            if let Err(e) = write
                                 .send(tokio_tungstenite::tungstenite::Message::Pong(data))
                                 .await
-                                .expect("Failed to pong");
+                            {
+                                eprintln!("⚠️ Architect: failed to pong: {}", e);
+                                break;
+                            }
                         }
                         _ => {}
                     }
@@ -173,40 +215,54 @@ impl LogisticsArchitect {
                 // B. Internal Job Channel (Data Plane / API)
                 Some(job) = job_rx.recv() => {
                     println!("🚚 Architect: Received Internal Job ID: {}", job.id);
-                    let responses = {
-                        let mut m = manager.lock().unwrap();
-                        // Directly inject as if it was a distribution request
+                    // Wrap the CPU-heavy distribute_tasks (H3 partitioning) in
+                    // spawn_blocking so it runs off the async executor thread pool.
+                    let manager_for_spawn = manager.clone();
+                    let responses = tokio::task::spawn_blocking(move || {
+                        let mut m = manager_for_spawn.blocking_lock();
                         let (msgs, _) = m.distribute_tasks(job.id, &job.problem);
                         msgs
-                    };
+                    }).await.unwrap_or_default();
 
                     // Feed all auction requests into the sink buffer first, then
                     // flush once — this fires all partition auctions as a batch
                     // rather than waiting for each send to complete sequentially.
+                    let mut feed_ok = true;
                     for resp in &responses {
-                        let json = serde_json::to_string(resp).unwrap();
-                        write
+                        let Ok(json) = serde_json::to_string(resp) else { continue; };
+                        if let Err(e) = write
                             .feed(tokio_tungstenite::tungstenite::Message::Text(json))
                             .await
-                            .expect("Failed to feed Auction Request");
+                        {
+                            eprintln!("⚠️ Architect: failed to feed Auction Request: {}", e);
+                            feed_ok = false;
+                            break;
+                        }
                     }
-                    write.flush().await.expect("Failed to flush Auction Requests");
+                    if feed_ok {
+                        if let Err(e) = write.flush().await {
+                            eprintln!("⚠️ Architect: failed to flush Auction Requests: {}", e);
+                        }
+                    }
                 }
 
                 // C. Direct Protocol Messages (from Data Plane)
                 Some(p_msg) = protocol_rx.recv() => {
                     println!("🚚 Architect: Received Direct Protocol Message");
                     let responses = {
-                        let mut m = manager.lock().unwrap();
+                        let mut m = manager.lock().await;
                         m.handle_incoming_message(p_msg)
                     };
 
                     for resp in responses {
-                        let json = serde_json::to_string(&resp).unwrap();
-                        write
+                        let Ok(json) = serde_json::to_string(&resp) else { continue; };
+                        if let Err(e) = write
                             .send(tokio_tungstenite::tungstenite::Message::Text(json))
                             .await
-                            .expect("Failed to send response");
+                        {
+                            eprintln!("⚠️ Architect: failed to send response: {}", e);
+                            break;
+                        }
                     }
                 }
 
@@ -381,6 +437,7 @@ impl LogisticsArchitect {
 
         // 🔑 CRITICAL: Persistent the ROOT problem so check_mission_completion can find it
         self.pending_problems.insert(auction_id.clone(), problem.clone());
+        self.problem_timestamps.insert(auction_id.clone(), std::time::Instant::now());
         self.mission_roots.insert(mission_id.clone(), auction_id.clone());
 
         // --- HIERARCHICAL ORCHESTRATION ---
@@ -418,6 +475,7 @@ impl LogisticsArchitect {
             });
 
             self.pending_problems.insert(task_id.clone(), problem);
+            self.problem_timestamps.insert(task_id.clone(), std::time::Instant::now());
             self.expected_results.insert(task_id.clone(), 1);
             ids.push(task_id.clone());
             messages.push(self.auction_manager.create_auction(
@@ -492,6 +550,7 @@ impl LogisticsArchitect {
                 });
 
                 self.pending_problems.insert(sector_task_id.clone(), sub_problem);
+                self.problem_timestamps.insert(sector_task_id.clone(), std::time::Instant::now());
                 self.expected_results.insert(sector_task_id.clone(), 1);
                 ids.push(sector_task_id.clone());
                 sector_ids.push(sector_task_id.clone());
@@ -556,6 +615,7 @@ impl LogisticsArchitect {
             );
 
             self.pending_problems.insert(sub_task_id.clone(), sub_problem);
+            self.problem_timestamps.insert(sub_task_id.clone(), std::time::Instant::now());
             self.expected_results.insert(sub_task_id.clone(), 1);
             ids.push(sub_task_id.clone());
             partition_ids.push(sub_task_id.clone());
@@ -699,12 +759,22 @@ impl LogisticsArchitect {
                 self.process_solution(solution)
             }
             LoxiMessage::PushSolution { auction_id, ticket, payload } => {
-                if !(self.verify_fn)(&ticket) {
-                    eprintln!(
-                        "⚠️ PushSolution rejected: invalid ticket for {}",
-                        auction_id
-                    );
-                    return vec![];
+                match (self.verify_fn)(&ticket) {
+                    Some((_sub, aud)) if aud == auction_id => {}
+                    Some((_sub, aud)) => {
+                        eprintln!(
+                            "⚠️ PushSolution rejected: ticket aud '{}' != auction_id '{}'",
+                            aud, auction_id
+                        );
+                        return vec![];
+                    }
+                    None => {
+                        eprintln!(
+                            "⚠️ PushSolution rejected: invalid ticket for {}",
+                            auction_id
+                        );
+                        return vec![];
+                    }
                 }
                 println!(
                     "🔓 Architect: Received Revealed Solution for {} (ticket verified)",
@@ -739,11 +809,16 @@ impl LogisticsArchitect {
 
     pub fn process_solution(&mut self, solution: loxi_core::Solution) -> Vec<LoxiMessage> {
         let auction_id = solution.auction_id.clone();
-        let role = self
-            .pending_problems
-            .get(&auction_id)
-            .map(|p| p.role.clone())
-            .unwrap_or(TaskRole::Leaf);
+        let role = match self.pending_problems.get(&auction_id) {
+            Some(p) => p.role.clone(),
+            None => {
+                eprintln!(
+                    "⚠️ process_solution: unknown auction_id '{}' — dropping",
+                    auction_id
+                );
+                return Vec::new();
+            }
+        };
 
         println!("🛤️ Architect: Processing Solution for {} (Role: {:?})", auction_id, role);
 
@@ -841,6 +916,8 @@ impl LogisticsArchitect {
                                 });
 
                                 self.pending_problems.insert(sub_task_id.clone(), sub_problem);
+                                self.problem_timestamps
+                                    .insert(sub_task_id.clone(), std::time::Instant::now());
 
                                 // 🔑 CRITICAL: Track subtasks at the ROOT level for mission completion
                                 let root_id = self.find_ultimate_root(&auction_id);
@@ -1043,6 +1120,7 @@ impl LogisticsArchitect {
                         );
                     }
                     self.pending_problems.insert(solve_id.clone(), solve_problem);
+                    self.problem_timestamps.insert(solve_id.clone(), std::time::Instant::now());
 
                     // 🔑 CRITICAL: Track Solver task at the ROOT level
                     let root_id = self.find_ultimate_root(&auction_id);
@@ -1141,6 +1219,8 @@ impl LogisticsArchitect {
                                     retry_problem.parent_id = Some(rid.clone());
 
                                     self.pending_problems.insert(retry_id.clone(), retry_problem);
+                                    self.problem_timestamps
+                                        .insert(retry_id.clone(), std::time::Instant::now());
 
                                     if let Some(mut root_ref) = self.pending_problems.get_mut(&rid)
                                     {
@@ -1539,16 +1619,15 @@ impl DataProvider for LogisticsArchitectProvider {
     async fn get_payload(&self, auction_id: &str) -> Option<String> {
         // Clone the Arc to avoid holding the manager lock while accessing the map
         let problems_arc = {
-            let mg = self.manager.lock().unwrap();
+            let mg = self.manager.lock().await;
             mg.pending_problems.clone()
         };
 
-        let res = problems_arc.get(auction_id).and_then(|p| serde_json::to_string(p.value()).ok());
-        res
+        problems_arc.get(auction_id).and_then(|p| serde_json::to_string(p.value()).ok())
     }
 
     async fn handle_solution(&self, solution: loxi_core::Solution) -> Vec<LoxiMessage> {
-        let mut mg = self.manager.lock().unwrap();
+        let mut mg = self.manager.lock().await;
         mg.handle_incoming_message(loxi_core::Message::SubmitSolution(solution))
     }
 
@@ -1558,7 +1637,7 @@ impl DataProvider for LogisticsArchitectProvider {
         payload: String,
         progress: f32,
     ) -> Vec<LoxiMessage> {
-        let mut mg = self.manager.lock().unwrap();
+        let mut mg = self.manager.lock().await;
         mg.handle_incoming_message(loxi_core::Message::PushData { auction_id, payload, progress })
     }
 
@@ -1568,7 +1647,7 @@ impl DataProvider for LogisticsArchitectProvider {
         status: String,
         details: Option<String>,
     ) -> Vec<LoxiMessage> {
-        let mut mg = self.manager.lock().unwrap();
+        let mut mg = self.manager.lock().await;
         mg.handle_incoming_message(loxi_core::Message::UpdateMissionStatus {
             mission_id,
             status,
@@ -1577,7 +1656,7 @@ impl DataProvider for LogisticsArchitectProvider {
     }
 
     async fn handle_solution_push(&self, auction_id: String, payload: String) -> Vec<LoxiMessage> {
-        let mut mg = self.manager.lock().unwrap();
+        let mut mg = self.manager.lock().await;
         mg.handle_pushed_payload(auction_id, payload)
     }
 }
