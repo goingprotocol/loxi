@@ -19,6 +19,8 @@ type Log = {
 const DEFAULT_ORCHESTRATOR = import.meta.env.VITE_ORCHESTRATOR_URL || "ws://localhost:3005";
 const ARCHITECT_BASE = import.meta.env.VITE_ARCHITECT_URL || "http://localhost:8080";
 
+const OWNER_KEY = 'loxi_owner_id';
+
 function App() {
   const [url, setUrl] = useState(DEFAULT_ORCHESTRATOR)
   const [isConnected, setIsConnected] = useState(false)
@@ -34,6 +36,14 @@ function App() {
 
   const sdkRef = useRef<LoxiWorkerDevice | null>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
+
+  const persistedOwner = useMemo(() => {
+    const stored = localStorage.getItem(OWNER_KEY);
+    if (stored) return stored;
+    const fresh = `owner_${crypto.randomUUID()}`;
+    localStorage.setItem(OWNER_KEY, fresh);
+    return fresh;
+  }, []);
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -62,7 +72,7 @@ function App() {
       is_webgpu_enabled: false,
       affinity_hashes: [],
       verified_capacity: 0,
-      owner_id: `owner_${Math.floor(Math.random() * 10000)}` // Set an owner ID for notifications
+      owner_id: persistedOwner // Persisted in localStorage so it survives tab refresh
     };
     setNodeSpecs(specs);
   }, []);
@@ -218,7 +228,10 @@ function App() {
               console.warn("Polling error:", e);
             }
           }, 3000);
-          setTimeout(() => clearInterval(pollInterval), 600000);
+          setTimeout(() => {
+            clearInterval(pollInterval);
+            addLog('Mission polling timed out after 10 minutes — no solution received.', 'error');
+          }, 600000);
         }
       }
     } catch (e) { addLog(`❌ Failed to reach Conductor`, "error"); }
@@ -253,14 +266,22 @@ function App() {
       stops = parseCSV(uploadText);
     }
     if (stops.length === 0) { addLog('❌ No valid stops parsed', 'error'); return; }
-    const base = { lat: -34.6036, lon: -58.5408 };
+    const latAvg = stops.reduce((s: number, p: any) => {
+      const v = p.location?.lat ?? p.lat ?? 0;
+      return s + (Math.abs(v) > 180 ? v / 1_000_000 : v);
+    }, 0) / Math.max(stops.length, 1);
+    const lonAvg = stops.reduce((s: number, p: any) => {
+      const v = p.location?.lon ?? p.lon ?? 0;
+      return s + (Math.abs(v) > 180 ? v / 1_000_000 : v);
+    }, 0) / Math.max(stops.length, 1);
+    const base = { lat: latAvg, lon: lonAvg };
     const toE6 = (val: number) => Math.round(val * 1_000_000);
     setActiveSolutions({});
     setCurrentMission("");
     setArchitectProblem({
       stops,
       fleet_size: Math.max(1, Math.ceil(stops.length / 30)),
-      seed: 42,
+      seed: Math.floor(Date.now() * Math.random()),
       vehicle: {
         id: "Vehicle_1", capacity: 150.0,
         start_location: { lat: toE6(base.lat), lon: toE6(base.lon) },
@@ -276,14 +297,15 @@ function App() {
   const generateProblem = (count: number) => {
     setActiveSolutions({});
     setCurrentMission("");
-    const base = { lat: -34.6036, lon: -58.5408 };
     const toE6 = (val: number) => Math.round(val * 1000000);
 
+    // Use Buenos Aires as a visually sensible default centre for generated demos
+    const centre = { lat: -34.6036, lon: -58.5408 };
     const stops = Array.from({ length: count }, (_, i) => ({
       id: `Stop_${i + 1}`,
       location: {
-        lat: toE6(base.lat + (Math.random() - 0.5) * 0.015),
-        lon: toE6(base.lon + (Math.random() - 0.5) * 0.015)
+        lat: toE6(centre.lat + (Math.random() - 0.5) * 0.015),
+        lon: toE6(centre.lon + (Math.random() - 0.5) * 0.015)
       },
       time_window: { start: 0, end: 86399 },
       service_time: 300,
@@ -291,10 +313,15 @@ function App() {
       priority: 1
     }));
 
+    const base = {
+      lat: stops.reduce((s, p) => s + p.location.lat / 1_000_000, 0) / stops.length,
+      lon: stops.reduce((s, p) => s + p.location.lon / 1_000_000, 0) / stops.length,
+    };
+
     setArchitectProblem({
       stops,
       fleet_size: 5, // INCREASE: Allow up to 5 routes
-      seed: 42,
+      seed: Math.floor(Date.now() * Math.random()),
       vehicle: {
         id: "Vehicle_1",
         capacity: 150.0, // CONSTRAIN: 60 stops * 10 demand = 600 total. 150 capacity forces at least 4 vehicles.
@@ -391,7 +418,7 @@ function App() {
     if (format === 'csv') {
       const rows = ['route_id,stop_id,lat,lon,order'];
       currentRoutes.forEach((route, ri) => {
-        route.forEach((stopId, order) => {
+        route.forEach((stopId: string, order: number) => {
           const stop = stopMap.get(stopId) as any;
           if (stop) rows.push(`${ri + 1},${stopId},${fromE6(stop.location.lat)},${fromE6(stop.location.lon)},${order + 1}`);
         });
@@ -400,10 +427,10 @@ function App() {
     } else {
       const features: any[] = [];
       currentRoutes.forEach((route, ri) => {
-        const coords = route.map(id => stopMap.get(id) as any).filter(Boolean)
+        const coords = route.map((id: string) => stopMap.get(id) as any).filter(Boolean)
           .map((s: any) => [fromE6(s.location.lon), fromE6(s.location.lat)]);
         if (coords.length > 1) features.push({ type: 'Feature', properties: { route_id: ri + 1 }, geometry: { type: 'LineString', coordinates: coords } });
-        route.forEach((stopId, order) => {
+        route.forEach((stopId: string, order: number) => {
           const stop = stopMap.get(stopId) as any;
           if (stop) features.push({ type: 'Feature', properties: { stop_id: stopId, route_id: ri + 1, order: order + 1 }, geometry: { type: 'Point', coordinates: [fromE6(stop.location.lon), fromE6(stop.location.lat)] } });
         });

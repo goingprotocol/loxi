@@ -174,6 +174,24 @@ impl Default for Vehicle {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FleetVehicle {
+    pub type_id: String,
+    pub count: usize,
+    pub capacity: f64,
+    pub speed_mps: f64,
+    pub start_location: Location,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_location: Option<Location>,
+    pub shift_window: TimeWindow,
+    #[serde(default)]
+    pub fixed_cost: Option<f64>,
+    #[serde(default)]
+    pub distance_cost: Option<f64>,
+    #[serde(default)]
+    pub time_cost: Option<f64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum TaskRole {
     Partitioner,
@@ -232,6 +250,8 @@ pub struct Problem {
     #[serde(default = "default_fleet_size")]
     pub fleet_size: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub fleet: Option<Vec<FleetVehicle>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub candidate_routes: Option<Vec<CandidateRoute>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub distance_matrix: Option<Vec<Vec<f64>>>,
@@ -267,6 +287,7 @@ impl Problem {
             stops,
             vehicle,
             fleet_size: 1,
+            fleet: None,
             candidate_routes: None,
             distance_matrix: None,
             time_matrix: None,
@@ -299,6 +320,62 @@ impl Problem {
     pub fn validate(&self) -> Result<(), String> {
         if self.stops.is_empty() {
             return Err("Problem must have at least one stop".into());
+        }
+        if self.fleet_size == 0 {
+            return Err("fleet_size must be > 0".into());
+        }
+        if self.vehicle.capacity <= 0.0 {
+            return Err("vehicle.capacity must be > 0".into());
+        }
+        if self.vehicle.shift_window.start > self.vehicle.shift_window.end {
+            return Err("vehicle.shift_window.start > end".into());
+        }
+        for stop in &self.stops {
+            if stop.time_window.start > stop.time_window.end {
+                return Err(format!("Stop {}: time_window.start > end", stop.id));
+            }
+            if stop.demand < 0.0 {
+                return Err(format!("Stop {}: demand must be >= 0", stop.id));
+            }
+            if stop.demand.fract() != 0.0 {
+                eprintln!(
+                    "⚠️ Stop '{}': demand {:.4} has fractional part — rounded to {}",
+                    stop.id,
+                    stop.demand,
+                    stop.demand.round() as i32
+                );
+            }
+            if stop.location.lat.abs() > 90.0 || stop.location.lon.abs() > 180.0 {
+                return Err(format!(
+                    "Stop {}: invalid coordinates ({}, {})",
+                    stop.id, stop.location.lat, stop.location.lon
+                ));
+            }
+        }
+        if self.vehicle.capacity.fract() != 0.0 {
+            eprintln!(
+                "⚠️ vehicle.capacity {:.4} has fractional part — rounded to {}",
+                self.vehicle.capacity,
+                self.vehicle.capacity.round() as i32
+            );
+        }
+        if let Some(ref fleet) = self.fleet {
+            for fv in fleet {
+                if fv.count == 0 {
+                    return Err(format!("Fleet vehicle '{}': count must be > 0", fv.type_id));
+                }
+                if fv.capacity <= 0.0 {
+                    return Err(format!("Fleet vehicle '{}': capacity must be > 0", fv.type_id));
+                }
+                if fv.capacity.fract() != 0.0 {
+                    eprintln!(
+                        "⚠️ Fleet vehicle '{}': capacity {:.4} has fractional part — rounded to {}",
+                        fv.type_id,
+                        fv.capacity,
+                        fv.capacity.round() as i32
+                    );
+                }
+            }
         }
         Ok(())
     }

@@ -40,8 +40,10 @@ async fn main() {
 
     // 1. Initialize Internal Logistics Architect
     let shared_cache = std::sync::Arc::new(dashmap::DashMap::new());
-    let manager = LogisticsArchitect::new(&connect_addr, DOMAIN_ID, shared_cache);
-    let manager_arc = std::sync::Arc::new(std::sync::Mutex::new(manager));
+    let no_op_verify: loxi_logistics::VerifyFn =
+        std::sync::Arc::new(|_ticket: &str| Some(("".to_string(), "".to_string())));
+    let manager = LogisticsArchitect::new(&connect_addr, DOMAIN_ID, shared_cache, no_op_verify);
+    let manager_arc = std::sync::Arc::new(tokio::sync::Mutex::new(manager));
 
     // 2. Register as Authority with our PUBLIC DATA ADDRESS (The Sala)
     // This allows workers to discover where to download/push logs.
@@ -136,7 +138,7 @@ async fn main() {
                     );
 
                     let (messages, ids) = {
-                        let mut mg = manager.lock().unwrap();
+                        let mut mg = manager.lock().await;
                         println!("📥 HTTP: Received problem with {} stops", problem.stops.len());
 
                         mg.distribute_tasks(mission_id.clone(), &problem)
@@ -164,7 +166,7 @@ async fn main() {
             .and_then(move |params: std::collections::HashMap<String, String>| {
                 let manager = manager_for_http.clone();
                 async move {
-                    let mg = manager.lock().unwrap();
+                    let mg = manager.lock().await;
 
                     if let Some(mission_id) = params.get("mission_id") {
                         let solutions: std::collections::HashMap<String, serde_json::Value> = mg
@@ -308,7 +310,7 @@ async fn main() {
                         let tx = reader_outgoing_tx.clone();
                         tokio::spawn(async move {
                             let next_msgs = {
-                                let mut mg = manager.lock().unwrap();
+                                let mut mg = manager.lock().await;
                                 mg.handle_incoming_message(loxi_msg)
                             };
                             for next_msg in next_msgs {

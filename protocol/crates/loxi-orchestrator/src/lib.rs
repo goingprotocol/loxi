@@ -137,23 +137,22 @@ pub async fn run_server(port: u16, node_count: Arc<AtomicUsize>) {
                 auctions_wdog
                     .retain(|_, meta| now.saturating_sub(meta.created_at) < AUCTION_TTL_SECS);
 
-                for worker_id in expired {
+                for (worker_id, auction_id_opt) in expired {
                     eprintln!(
                         "⏰ Watchdog: worker {} silent for >{}s — re-queuing task",
                         worker_id, TASK_TIMEOUT_SECS
                     );
 
-                    // Find the auction this worker was handling
-                    let task_info = auctions_wdog
-                        .iter()
-                        .find(|e| e.value().assigned_worker_id.as_deref() == Some(&worker_id))
-                        .map(|e| {
+                    // O(1) lookup via reverse index returned by drain_expired
+                    let task_info = auction_id_opt.as_deref().and_then(|task_id| {
+                        auctions_wdog.get(task_id).map(|e| {
                             (
                                 e.key().clone(),
                                 e.value().poster_id.clone(),
                                 e.value().original_req.clone(),
                             )
-                        });
+                        })
+                    });
 
                     if let Some((task_id, poster_id, Some(req))) = task_info {
                         // Clear the stale assignment so the task can be re-scheduled
@@ -247,6 +246,11 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
 
         if msg.is_text() || msg.is_binary() {
             let text = msg.to_string();
+
+            if text.len() > 1_048_576 {
+                eprintln!("⚠️ Orchestrator: oversized message ({} bytes) — dropping", text.len());
+                continue;
+            }
 
             if let Ok(loxi_msg) = serde_json::from_str::<LoxiMessage>(&text) {
                 match loxi_msg {
@@ -650,13 +654,11 @@ async fn handle_connection(stream: TcpStream, addr: SocketAddr, ctx: ConnectionC
         node_count.fetch_sub(1, Ordering::Relaxed);
 
         // [FAULT TOLERANCE] RECOVERY PROCEDURE
-        // 1. Find all auctions assigned to this dead node
-        // Collect IDs first
-        let abandoned_task_ids: Vec<String> = active_auctions
-            .iter()
-            .filter(|r| r.value().assigned_worker_id.as_deref() == Some(&id))
-            .map(|r| r.key().clone())
-            .collect();
+        // 1. Find the auction assigned to this dead node via O(1) reverse index
+        let abandoned_task_ids: Vec<String> = {
+            let mut sched = scheduler.lock().await;
+            sched.worker_to_auction.remove(&id).into_iter().collect()
+        };
 
         for task_id in abandoned_task_ids {
             if let Some(mut meta) = active_auctions.get_mut(&task_id) {

@@ -33,7 +33,7 @@ pub async fn start_artifact_server(
     job_tx: tokio::sync::mpsc::UnboundedSender<crate::architect::LogisticsJob>,
     protocol_tx: tokio::sync::mpsc::UnboundedSender<loxi_core::Message>,
     shared_cache: Arc<dashmap::DashMap<String, crate::types::Problem>>,
-    verify_ticket: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    verify_ticket: crate::VerifyFn,
     node_count: Arc<AtomicUsize>,
 ) {
     let cache_filter = warp::any().map(move || shared_cache.clone());
@@ -82,32 +82,52 @@ pub async fn start_artifact_server(
         .and(rate_limit)
         .and(warp::body::json())
         .and(cache_filter.clone())
-        .map(
+        .and_then(
             move |_: (),
                   problem: crate::types::Problem,
                   cache: Arc<dashmap::DashMap<String, crate::types::Problem>>| {
-                println!("📥 API: Received Logistics Problem Submission");
-                let mission_id = uuid::Uuid::new_v4().to_string();
+                let job_tx = job_tx.clone();
+                async move {
+                    println!("📥 API: Received Logistics Problem Submission");
 
-                let job = crate::architect::LogisticsJob {
-                    id: mission_id.clone(),
-                    problem: problem.clone(),
-                };
+                    if let Err(e) = problem.validate() {
+                        return Ok::<_, warp::Rejection>(warp::reply::with_status(
+                            warp::reply::json(&serde_json::json!({
+                                "status": "error",
+                                "reason": e
+                            })),
+                            warp::http::StatusCode::BAD_REQUEST,
+                        ));
+                    }
 
-                if let Err(e) = job_tx.send(job) {
-                    eprintln!("❌ API Error: Failed to forward job to architect: {}", e);
-                    return warp::reply::json(&serde_json::json!({
-                        "status": "error",
-                        "reason": "Internal Architect Offline"
-                    }));
+                    let mission_id = uuid::Uuid::new_v4().to_string();
+
+                    let job = crate::architect::LogisticsJob {
+                        id: mission_id.clone(),
+                        problem: problem.clone(),
+                    };
+
+                    if let Err(e) = job_tx.send(job) {
+                        eprintln!("❌ API Error: Failed to forward job to architect: {}", e);
+                        return Ok(warp::reply::with_status(
+                            warp::reply::json(&serde_json::json!({
+                                "status": "error",
+                                "reason": "Internal Architect Offline"
+                            })),
+                            warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        ));
+                    }
+
+                    cache.insert(mission_id.clone(), problem);
+
+                    Ok(warp::reply::with_status(
+                        warp::reply::json(&serde_json::json!({
+                            "status": "accepted",
+                            "mission_id": mission_id
+                        })),
+                        warp::http::StatusCode::OK,
+                    ))
                 }
-
-                cache.insert(mission_id.clone(), problem);
-
-                warp::reply::json(&serde_json::json!({
-                    "status": "accepted",
-                    "mission_id": mission_id
-                }))
             },
         );
 
@@ -169,16 +189,31 @@ pub async fn start_artifact_server(
                                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(text) {
                                     if let Some(claim) = json.get("ClaimTask") {
                                         let ticket = claim["ticket"].as_str().unwrap_or_default();
-                                        if !verify_fn(ticket) {
-                                            let _ = websocket
-                                                .send(warp::ws::Message::text(
-                                                    r#"{"error":"invalid ticket"}"#,
-                                                ))
-                                                .await;
-                                            return;
-                                        }
                                         let auction_id =
                                             claim["auction_id"].as_str().unwrap_or_default();
+                                        match verify_fn(ticket) {
+                                            Some((_sub, aud)) if aud == auction_id => {}
+                                            Some((_sub, aud)) => {
+                                                eprintln!(
+                                                    "⚠️ Data Plane: ticket aud '{}' != auction_id '{}'",
+                                                    aud, auction_id
+                                                );
+                                                let _ = websocket
+                                                    .send(warp::ws::Message::text(
+                                                        r#"{"error":"ticket mismatch"}"#,
+                                                    ))
+                                                    .await;
+                                                return;
+                                            }
+                                            None => {
+                                                let _ = websocket
+                                                    .send(warp::ws::Message::text(
+                                                        r#"{"error":"invalid ticket"}"#,
+                                                    ))
+                                                    .await;
+                                                return;
+                                            }
+                                        }
                                         println!(
                                             "🔌 Data Plane: Worker connecting for {}",
                                             auction_id
@@ -216,6 +251,9 @@ pub async fn start_artifact_server(
                                     {
                                         if matches!(push, loxi_core::Message::PushSolution { .. }) {
                                             let _ = protocol_tx.send(push);
+                                            let _ = websocket
+                                                .send(warp::ws::Message::text(r#"{"ack":"ok"}"#))
+                                                .await;
                                         }
                                     }
                                 }

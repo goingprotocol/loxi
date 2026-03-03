@@ -261,11 +261,6 @@ export class LoxiWorkerDevice {
         try {
             let archAddr = lease.architect_address;
 
-            // Local dev helper
-            if (archAddr.includes("192.168.0.196")) {
-                archAddr = archAddr.replace("192.168.0.196", "localhost");
-            }
-
             // 1. DATA FETCH
             this.addLog(`📥 Claiming Data from Architect...`, "action");
 
@@ -459,7 +454,7 @@ export class LoxiWorkerDevice {
                     payload: null,
                     metadata: [
                         ["duration", String(taskDuration)],
-                        ["score", "100"]
+                        ["score", String(Math.round(1_000_000 / Math.max(taskDuration, 1)))]
                     ]
                 }
             }));
@@ -476,18 +471,70 @@ export class LoxiWorkerDevice {
         }
     }
 
-    private revealingSolution(auctionId: string, pending: any) {
-        const ws = new WebSocket(pending.architect_address);
-        ws.onopen = () => {
-            ws.send(JSON.stringify({
-                PushSolution: {
-                    auction_id: auctionId,
-                    ticket: pending.ticket,
-                    payload: pending.payload
+    private async revealingSolution(auctionId: string, pending: any) {
+        const maxAttempts = 3;
+        const backoffs = [2000, 4000, 8000];
+
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            try {
+                const ack = await new Promise<boolean>((resolve, reject) => {
+                    const ws = new WebSocket(pending.architect_address);
+                    const timeout = setTimeout(() => {
+                        ws.close();
+                        reject(new Error('reveal timeout (5s)'));
+                    }, 5000);
+
+                    ws.onopen = () => {
+                        ws.send(JSON.stringify({
+                            PushSolution: {
+                                auction_id: auctionId,
+                                ticket: pending.ticket,
+                                payload: pending.payload
+                            }
+                        }));
+                    };
+                    ws.onmessage = (e) => {
+                        try {
+                            const msg = JSON.parse(e.data);
+                            if (msg.ack === 'ok') {
+                                clearTimeout(timeout);
+                                ws.close();
+                                resolve(true);
+                            }
+                        } catch (_) {}
+                    };
+                    ws.onerror = () => {
+                        clearTimeout(timeout);
+                        reject(new Error('reveal websocket error'));
+                    };
+                    ws.onclose = (e) => {
+                        if (!e.wasClean) {
+                            clearTimeout(timeout);
+                            reject(new Error('reveal connection closed unexpectedly'));
+                        }
+                    };
+                });
+
+                if (ack) {
+                    this.addLog(`✅ Reveal acknowledged for ${auctionId}`, 'success');
+                    return;
                 }
-            }));
-            setTimeout(() => ws.close(), 500);
-        };
+            } catch (err) {
+                const isLast = attempt === maxAttempts - 1;
+                if (isLast) {
+                    this.addLog(
+                        `❌ CRITICAL: Reveal failed after ${maxAttempts} attempts for ${auctionId} — watchdog will recover in ~120s`,
+                        'error'
+                    );
+                } else {
+                    this.addLog(
+                        `⚠️ Reveal attempt ${attempt + 1} failed for ${auctionId}: ${err}. Retrying in ${backoffs[attempt] / 1000}s...`,
+                        'error'
+                    );
+                    await new Promise(r => setTimeout(r, backoffs[attempt]));
+                }
+            }
+        }
     }
 
     /**
