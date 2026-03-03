@@ -379,7 +379,13 @@ mod tests {
         }
     }
 
-    fn req(id: &str, min_ram: u64, min_cpu: u32, gpu: bool, affinities: Vec<&str>) -> TaskRequirement {
+    fn req(
+        id: &str,
+        min_ram: u64,
+        min_cpu: u32,
+        gpu: bool,
+        affinities: Vec<&str>,
+    ) -> TaskRequirement {
         TaskRequirement {
             id: id.to_string(),
             affinities: affinities.iter().map(|s| s.to_string()).collect(),

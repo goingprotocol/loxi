@@ -42,10 +42,9 @@ fn main() -> Result<()> {
                 // Shared primitives for A1 (ticket verify) and B5 (worker count)
                 let node_count = Arc::new(AtomicUsize::new(0));
                 let km = Arc::new(loxi_orchestrator::auth::KeyManager::new());
-                let verify_ticket: loxi_logistics::VerifyFn =
-                    Arc::new(move |token: &str| {
-                        km.verify_ticket(token).ok().map(|c| (c.sub, c.aud))
-                    });
+                let verify_ticket: loxi_logistics::VerifyFn = Arc::new(move |token: &str| {
+                    km.verify_ticket(token).ok().map(|c| (c.sub, c.aud))
+                });
 
                 let nc = node_count.clone();
                 tokio::spawn(async move {

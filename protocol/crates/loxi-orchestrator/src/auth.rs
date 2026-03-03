@@ -94,8 +94,8 @@ impl KeyManager {
 
     #[cfg(test)]
     pub fn from_pem(priv_pem: &str, pub_pem: &str) -> Self {
-        let encoding_key = EncodingKey::from_rsa_pem(priv_pem.as_bytes())
-            .expect("test: bad private key PEM");
+        let encoding_key =
+            EncodingKey::from_rsa_pem(priv_pem.as_bytes()).expect("test: bad private key PEM");
         Self { encoding_key, public_key_pem: pub_pem.to_string() }
     }
 }
