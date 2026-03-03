@@ -360,3 +360,155 @@ impl Scheduler {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use loxi_core::{NodeSpecs, TaskRequirement, TaskType};
+
+    fn specs(id: &str, ram_mb: u64, threads: u32, gpu: bool, affinities: Vec<&str>) -> NodeSpecs {
+        NodeSpecs {
+            id: id.to_string(),
+            ram_mb,
+            vram_mb: 0,
+            thread_count: threads,
+            is_webgpu_enabled: gpu,
+            affinity_hashes: affinities.iter().map(|s| s.to_string()).collect(),
+            verified_capacity: 0,
+            owner_id: None,
+        }
+    }
+
+    fn req(id: &str, min_ram: u64, min_cpu: u32, gpu: bool, affinities: Vec<&str>) -> TaskRequirement {
+        TaskRequirement {
+            id: id.to_string(),
+            affinities: affinities.iter().map(|s| s.to_string()).collect(),
+            min_ram_mb: min_ram,
+            min_cpu_threads: min_cpu,
+            use_gpu: gpu,
+            task_type: TaskType::Compute,
+            priority_for_owner: None,
+            metadata: vec![],
+        }
+    }
+
+    // Tier 2: affinity worker beats a higher-scoring generic worker
+    #[test]
+    fn affinity_worker_beats_higher_score_generic() {
+        let mut sched = Scheduler::new();
+        sched.add_worker(specs("high_score", 32_000, 16, true, vec![]));
+        sched.add_worker(specs("affinity_worker", 8_000, 4, false, vec!["model-xyz"]));
+
+        let result = sched.schedule_task(
+            "t1".to_string(),
+            req("t1", 4_000, 2, false, vec!["model-xyz"]),
+            "poster".to_string(),
+        );
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().node_id, "affinity_worker");
+    }
+
+    // Tier 3: hardware fallback when no worker has the affinity (dynamic loading)
+    #[test]
+    fn hardware_fallback_when_no_affinity_match() {
+        let mut sched = Scheduler::new();
+        sched.add_worker(specs("worker_a", 16_000, 8, false, vec!["other-model"]));
+
+        let result = sched.schedule_task(
+            "t1".to_string(),
+            req("t1", 4_000, 2, false, vec!["model-xyz"]),
+            "poster".to_string(),
+        );
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().node_id, "worker_a");
+    }
+
+    // Under-spec worker: task must be queued, not assigned
+    #[test]
+    fn undersized_worker_queues_task() {
+        let mut sched = Scheduler::new();
+        sched.add_worker(specs("tiny", 2_000, 4, false, vec![]));
+
+        let result = sched.schedule_task(
+            "t1".to_string(),
+            req("t1", 8_000, 2, false, vec![]),
+            "poster".to_string(),
+        );
+
+        assert!(result.is_none());
+    }
+
+    // Reverse index is populated when a task is scheduled
+    #[test]
+    fn worker_to_auction_populated_on_schedule() {
+        let mut sched = Scheduler::new();
+        sched.add_worker(specs("w1", 8_000, 4, false, vec![]));
+
+        sched.schedule_task(
+            "task-42".to_string(),
+            req("task-42", 1_000, 1, false, vec![]),
+            "poster".to_string(),
+        );
+
+        assert_eq!(sched.worker_to_auction.get("w1").map(String::as_str), Some("task-42"));
+    }
+
+    // Reverse index is cleared when a worker is released
+    #[test]
+    fn release_clears_reverse_index() {
+        let mut sched = Scheduler::new();
+        let s = specs("w1", 8_000, 4, false, vec![]);
+        sched.add_worker(s.clone());
+        sched.schedule_task(
+            "task-42".to_string(),
+            req("task-42", 1_000, 1, false, vec![]),
+            "poster".to_string(),
+        );
+
+        assert!(sched.worker_to_auction.contains_key("w1"));
+        sched.release_worker("w1", s);
+        assert!(!sched.worker_to_auction.contains_key("w1"));
+    }
+
+    // drain_expired returns (worker_id, Some(auction_id)) and clears reverse index
+    #[test]
+    fn drain_expired_returns_worker_auction_pair() {
+        let mut sched = Scheduler::new();
+        sched.add_worker(specs("w1", 8_000, 4, false, vec![]));
+        sched.schedule_task(
+            "task-exp".to_string(),
+            req("task-exp", 1_000, 1, false, vec![]),
+            "poster".to_string(),
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let expired = sched.drain_expired(Duration::from_nanos(1));
+
+        assert_eq!(expired.len(), 1);
+        let (wid, aid) = &expired[0];
+        assert_eq!(wid, "w1");
+        assert_eq!(aid.as_deref(), Some("task-exp"));
+        assert!(!sched.worker_to_auction.contains_key("w1"));
+    }
+
+    // Queued task is piped immediately to the next worker that joins
+    #[test]
+    fn queued_task_pipes_to_next_available_worker() {
+        let mut sched = Scheduler::new();
+
+        let result = sched.schedule_task(
+            "task-pending".to_string(),
+            req("task-pending", 1_000, 1, false, vec![]),
+            "poster".to_string(),
+        );
+        assert!(result.is_none()); // Queued
+
+        let pipe = sched.add_worker(specs("w1", 8_000, 4, false, vec![]));
+        assert!(pipe.is_some());
+        let (assignment, task_id, ..) = pipe.unwrap();
+        assert_eq!(assignment.node_id, "w1");
+        assert_eq!(task_id, "task-pending");
+    }
+}
