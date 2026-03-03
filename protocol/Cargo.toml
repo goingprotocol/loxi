@@ -18,6 +18,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Loxi Contributors"]
 repository = "https://github.com/goingprotocol/loxi"
+license = "MIT"
 
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }

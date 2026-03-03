@@ -3,6 +3,11 @@
 **Open-source distributed Vehicle Routing Protocol.**
 Browser tabs become compute workers that bid on, solve, and return routing problems — no installation required on the worker side.
 
+[![crates.io](https://img.shields.io/crates/v/loxi-cli.svg)](https://crates.io/crates/loxi-cli)
+[![crates.io](https://img.shields.io/crates/v/loxi-core.svg)](https://crates.io/crates/loxi-core)
+[![crates.io](https://img.shields.io/crates/v/loxi-orchestrator.svg)](https://crates.io/crates/loxi-orchestrator)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 ```
 Client submits problem
         │
@@ -42,7 +47,20 @@ Workers are matched by affinity (cached WASM artifact) first, then by hardware s
 
 ## Quickstart
 
-### Option A — Docker (recommended for new contributors)
+### Option A — Install from crates.io
+
+If you just want to run a node:
+
+```bash
+cargo install loxi-cli
+loxi node
+```
+
+This starts the Grid Orchestrator on port 3005 and the Logistics API server on port 8080. You still need routing tiles (`bash scripts/download_tiles.sh`) and an RSA keypair in `protocol/crates/loxi-orchestrator/.env` — see the manual setup section below.
+
+---
+
+### Option B — Docker (recommended for new contributors)
 
 ```bash
 # 1. Copy the env template and fill in your RSA keys (see step 1 below if you need to generate them)
@@ -65,7 +83,7 @@ LOXI_CITIES="south-america/argentina-latest,south-america/uruguay-latest" bash s
 
 ---
 
-### Option B — manual
+### Option C — manual
 
 #### Prerequisites
 

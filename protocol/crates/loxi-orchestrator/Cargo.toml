@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
+license.workspace = true
+description = "WebSocket orchestrator for the Loxi distributed task auction system"
+exclude = [".env"]
 
 [dependencies]
 tokio = { version = "1.0", features = ["full"] }
@@ -11,7 +14,7 @@ tokio-tungstenite = "0.20"
 futures-util = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-loxi-core = { path = "../loxi-core" }
+loxi-core = { path = "../loxi-core", version = "0.1.0" }
 jsonwebtoken = { version = "10.3.0", features = ["use_pem", "rust_crypto"] }
 chrono = "0.4.43"
 dotenv = "0.15.0"

@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
+license.workspace = true
+description = "Core node-selection and worker-pool primitives for the Loxi distributed routing network"
 
 [dependencies]
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
