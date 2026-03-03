@@ -50,6 +50,7 @@ fn main() -> Result<()> {
                     loxi_orchestrator::run_server(orchestrator_port, nc).await;
                 });
 
+                let verify_for_architect = verify_ticket.clone();
                 let tx_clone = job_tx.clone();
                 let cache_for_server = shared_cache.clone();
                 tokio::spawn(async move {
@@ -77,6 +78,7 @@ fn main() -> Result<()> {
                         job_rx,
                         protocol_rx,
                         cache_for_manager,
+                        verify_for_architect,
                     )
                     .await;
                 });

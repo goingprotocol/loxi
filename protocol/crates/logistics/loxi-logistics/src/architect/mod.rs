@@ -53,6 +53,7 @@ pub struct LogisticsArchitect {
     pub pending_bids: dashmap::DashMap<String, Vec<loxi_core::Solution>>, // AuctionID -> List of Candidates
     pub expected_results: dashmap::DashMap<String, usize>, // AuctionID -> Total Workers Assigned
     pub mission_roots: dashmap::DashMap<String, String>,   // MissionID -> RootProblemID
+    pub verify_fn: Arc<dyn Fn(&str) -> bool + Send + Sync>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -77,6 +78,7 @@ impl LogisticsArchitect {
         orchestrator_url: &str,
         domain_id: &str,
         shared_cache: Arc<dashmap::DashMap<String, types::Problem>>,
+        verify_fn: Arc<dyn Fn(&str) -> bool + Send + Sync>,
     ) -> Self {
         Self {
             domain_id: domain_id.to_string(),
@@ -89,6 +91,7 @@ impl LogisticsArchitect {
             pending_bids: dashmap::DashMap::new(),
             expected_results: dashmap::DashMap::new(),
             mission_roots: dashmap::DashMap::new(),
+            verify_fn,
         }
     }
 
@@ -100,6 +103,7 @@ impl LogisticsArchitect {
         mut job_rx: tokio::sync::mpsc::UnboundedReceiver<LogisticsJob>,
         mut protocol_rx: tokio::sync::mpsc::UnboundedReceiver<loxi_core::Message>,
         shared_cache: Arc<dashmap::DashMap<String, types::Problem>>,
+        verify_fn: Arc<dyn Fn(&str) -> bool + Send + Sync>,
     ) {
         use futures_util::{SinkExt, StreamExt};
         use tokio_tungstenite::connect_async;
@@ -115,8 +119,12 @@ impl LogisticsArchitect {
         // LogisticsArchitect itself is protected by a Mutex (async one for the loop)
         // We use std::sync::Mutex to match the shared cache type, even though we are in async context.
         // This blocks the thread briefly, which is acceptable for this logic.
-        let manager =
-            Arc::new(std::sync::Mutex::new(Self::new(orchestrator_url, domain_id, shared_cache)));
+        let manager = Arc::new(std::sync::Mutex::new(Self::new(
+            orchestrator_url,
+            domain_id,
+            shared_cache,
+            verify_fn,
+        )));
 
         // 1. REGISTER
         let reg_msg = {
@@ -516,12 +524,17 @@ impl LogisticsArchitect {
                 .cloned()
                 .collect();
 
-            let sub_task_id = uuid::Uuid::new_v4().to_string();
+            let sub_task_id = if partition.id == "overflow_rescue" {
+                format!("overflow_rescue_{}", uuid::Uuid::new_v4())
+            } else {
+                uuid::Uuid::new_v4().to_string()
+            };
             let sub_problem = types::Problem {
                 id: Some(sub_task_id.clone()),
                 mission_id: Some(mission_id.clone()),
                 stops: sub_stops.clone(),
                 fleet_size: problem.fleet_size, // Propagate or proportional
+                fleet: problem.fleet.clone(),
                 vehicle: problem.vehicle.clone(),
                 distance_matrix: None,
                 time_matrix: None,
@@ -685,12 +698,18 @@ impl LogisticsArchitect {
                 // CASE B: Reveal Signal (With Payload)
                 self.process_solution(solution)
             }
-            LoxiMessage::PushSolution { auction_id, ticket: _, payload } => {
+            LoxiMessage::PushSolution { auction_id, ticket, payload } => {
+                if !(self.verify_fn)(&ticket) {
+                    eprintln!(
+                        "⚠️ PushSolution rejected: invalid ticket for {}",
+                        auction_id
+                    );
+                    return vec![];
+                }
                 println!(
-                    "🔓 Architect: Received Revealed Solution for {} (Ticket validated)",
+                    "🔓 Architect: Received Revealed Solution for {} (ticket verified)",
                     auction_id
                 );
-                // [SECURITY] In V2, we would verify the 'ticket' against the one we issued
                 let solution = loxi_core::Solution {
                     auction_id,
                     mission_id: None, // Will be recovered from pending problem
@@ -789,6 +808,7 @@ impl LogisticsArchitect {
                                     mission_id: mission_id.clone(),
                                     stops: sub_stops.clone(),
                                     fleet_size: 1,
+                                    fleet: parent.fleet.clone(),
                                     vehicle: parent.vehicle.clone(),
                                     distance_matrix: None,
                                     time_matrix: None,
@@ -1371,11 +1391,17 @@ impl LogisticsArchitect {
         let mut combined_cost = 0.0;
         let mut completed_count = 0;
         let mut total_count = 0;
+        let mut overflow_rescue_stop_count = 0usize;
 
         if let Some(ref root) = root_problem {
             if !root.subtask_ids.is_empty() {
                 total_count = root.subtask_ids.len();
                 for sub_id in &root.subtask_ids {
+                    if sub_id.starts_with("overflow_rescue_") {
+                        if let Some(sub_ref) = self.pending_problems.get(sub_id) {
+                            overflow_rescue_stop_count += sub_ref.value().stops.len();
+                        }
+                    }
                     if let Some(sub_ref) = self.pending_problems.get(sub_id) {
                         let sub = sub_ref.value();
                         if let Some(ref sol) = sub.solution {
@@ -1424,13 +1450,30 @@ impl LogisticsArchitect {
         if completed_count == total_count && total_count > 0 {
             println!("🎉 Mission {} FULLY COMPLETED!", mission_id);
 
+            let overflow_violations: Vec<types::Violation> = if overflow_rescue_stop_count > 0 {
+                vec![types::Violation {
+                    violation_type: "overflow_rescue".to_string(),
+                    stop_id: "partition".to_string(),
+                    magnitude: overflow_rescue_stop_count as f64,
+                }]
+            } else {
+                Vec::new()
+            };
+
+            if overflow_rescue_stop_count > 0 {
+                println!(
+                    "⚠️ Mission {}: {} stop(s) fell into overflow rescue partition — check coordinate validity",
+                    mission_id, overflow_rescue_stop_count
+                );
+            }
+
             let final_solution = types::Solution {
                 all_stops: combined_all_stops,
                 tours: Some(combined_tours),
                 cost: combined_cost,
                 unassigned_jobs: Vec::new(),
                 cost_breakdown: Default::default(),
-                violations: Vec::new(),
+                violations: overflow_violations,
                 metadata: Default::default(),
                 matrix: None,
             };

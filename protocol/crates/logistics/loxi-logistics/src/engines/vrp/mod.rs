@@ -44,7 +44,9 @@ impl VrpSolver {
             .map_err(|e| format!("Failed to build solver config: {}", e))?;
 
         let solver = CoreSolver::new(core_problem.clone(), config);
+        let solve_start = std::time::Instant::now();
         let core_solution = solver.solve().map_err(|e| format!("Solver failed: {}", e))?;
+        let elapsed_ms = solve_start.elapsed().as_millis() as u64;
 
         // Use write_pragmatic to serialize the solution to a buffer, then deserialize it
         let mut buffer = Vec::new();
@@ -62,7 +64,7 @@ impl VrpSolver {
         let pragmatic_sol: pragmatic_solution::Solution = serde_json::from_slice(&buffer)
             .map_err(|e| format!("Failed to deserialize pragmatic solution: {}", e))?;
 
-        Self::from_pragmatic(problem, pragmatic_sol)
+        Self::from_pragmatic(problem, pragmatic_sol, elapsed_ms)
     }
 
     fn to_pragmatic(
@@ -130,43 +132,97 @@ impl VrpSolver {
             })
             .collect();
 
-        let vehicle_type = pragmatic_problem::VehicleType {
-            type_id: "default_vehicle".to_string(),
-            vehicle_ids: (1..=problem.fleet_size).map(|i| format!("v{}", i)).collect(),
-            profile: pragmatic_problem::VehicleProfile {
-                matrix: "main_matrix".to_string(),
-                scale: None,
-            },
-            costs: pragmatic_problem::VehicleCosts { fixed: Some(10.0), distance: 1.0, time: 0.1 },
-            shifts: vec![pragmatic_problem::VehicleShift {
-                start: pragmatic_problem::ShiftStart {
-                    earliest: Self::format_time(problem.vehicle.shift_window.start),
-                    latest: None,
-                    location: PragmaticLocation::Reference {
-                        index: *mapping.get(&0).unwrap_or(&0),
-                    },
-                },
-                end: problem.vehicle.end_location.as_ref().map(|_loc| {
-                    let old_end_idx = if let Some(matrix) = &problem.distance_matrix {
-                        matrix.len() - 1
-                    } else {
-                        1 + problem.stops.len()
-                    };
-                    let index = *mapping.get(&old_end_idx).unwrap_or(&0);
-                    pragmatic_problem::ShiftEnd {
-                        earliest: None,
-                        latest: Self::format_time(problem.vehicle.shift_window.end),
-                        location: PragmaticLocation::Reference { index },
-                    }
-                }),
-                breaks: None,
-                reloads: None,
-                recharges: None,
-            }],
-            capacity: vec![problem.vehicle.capacity as i32],
-            skills: None,
-            limits: None,
+        let default_end_idx = if let Some(matrix) = &problem.distance_matrix {
+            matrix.len() - 1
+        } else {
+            1 + problem.stops.len()
         };
+
+        let vehicle_types: Vec<pragmatic_problem::VehicleType> =
+            if let Some(ref fleet) = problem.fleet {
+                fleet
+                    .iter()
+                    .map(|fv| {
+                        let ids: Vec<String> =
+                            (1..=fv.count).map(|i| format!("{}_{}", fv.type_id, i)).collect();
+                        pragmatic_problem::VehicleType {
+                            type_id: fv.type_id.clone(),
+                            vehicle_ids: ids,
+                            profile: pragmatic_problem::VehicleProfile {
+                                matrix: "main_matrix".to_string(),
+                                scale: None,
+                            },
+                            costs: pragmatic_problem::VehicleCosts {
+                                fixed: fv.fixed_cost,
+                                distance: fv.distance_cost.unwrap_or(1.0),
+                                time: fv.time_cost.unwrap_or(0.1),
+                            },
+                            shifts: vec![pragmatic_problem::VehicleShift {
+                                start: pragmatic_problem::ShiftStart {
+                                    earliest: Self::format_time(fv.shift_window.start),
+                                    latest: None,
+                                    location: PragmaticLocation::Reference {
+                                        index: *mapping.get(&0).unwrap_or(&0),
+                                    },
+                                },
+                                end: fv.end_location.as_ref().map(|_| {
+                                    let index = *mapping.get(&default_end_idx).unwrap_or(&0);
+                                    pragmatic_problem::ShiftEnd {
+                                        earliest: None,
+                                        latest: Self::format_time(fv.shift_window.end),
+                                        location: PragmaticLocation::Reference { index },
+                                    }
+                                }),
+                                breaks: None,
+                                reloads: None,
+                                recharges: None,
+                            }],
+                            capacity: vec![fv.capacity as i32],
+                            skills: None,
+                            limits: None,
+                        }
+                    })
+                    .collect()
+            } else {
+                vec![pragmatic_problem::VehicleType {
+                    type_id: "default_vehicle".to_string(),
+                    vehicle_ids: (1..=problem.fleet_size)
+                        .map(|i| format!("v{}", i))
+                        .collect(),
+                    profile: pragmatic_problem::VehicleProfile {
+                        matrix: "main_matrix".to_string(),
+                        scale: None,
+                    },
+                    costs: pragmatic_problem::VehicleCosts {
+                        fixed: Some(10.0),
+                        distance: 1.0,
+                        time: 0.1,
+                    },
+                    shifts: vec![pragmatic_problem::VehicleShift {
+                        start: pragmatic_problem::ShiftStart {
+                            earliest: Self::format_time(problem.vehicle.shift_window.start),
+                            latest: None,
+                            location: PragmaticLocation::Reference {
+                                index: *mapping.get(&0).unwrap_or(&0),
+                            },
+                        },
+                        end: problem.vehicle.end_location.as_ref().map(|_loc| {
+                            let index = *mapping.get(&default_end_idx).unwrap_or(&0);
+                            pragmatic_problem::ShiftEnd {
+                                earliest: None,
+                                latest: Self::format_time(problem.vehicle.shift_window.end),
+                                location: PragmaticLocation::Reference { index },
+                            }
+                        }),
+                        breaks: None,
+                        reloads: None,
+                        recharges: None,
+                    }],
+                    capacity: vec![problem.vehicle.capacity as i32],
+                    skills: None,
+                    limits: None,
+                }]
+            };
 
         // 🟢 3. Build the Remapped Square Matrices
         let size = used_indices.len();
@@ -199,13 +255,20 @@ impl VrpSolver {
             error_codes: None,
         }];
 
+        let profile_speed = problem
+            .fleet
+            .as_ref()
+            .and_then(|f| f.first())
+            .map(|fv| fv.speed_mps)
+            .unwrap_or(problem.vehicle.speed_mps);
+
         let prob = pragmatic_problem::Problem {
             plan: pragmatic_problem::Plan { jobs, relations: None, clustering: None },
             fleet: pragmatic_problem::Fleet {
-                vehicles: vec![vehicle_type],
+                vehicles: vehicle_types,
                 profiles: vec![pragmatic_problem::MatrixProfile {
                     name: "main_matrix".to_string(),
-                    speed: Some(problem.vehicle.speed_mps),
+                    speed: Some(profile_speed),
                 }],
                 resources: None,
             },
@@ -216,8 +279,9 @@ impl VrpSolver {
     }
 
     fn from_pragmatic(
-        _original_problem: &LoxiProblem,
+        original_problem: &LoxiProblem,
         sol: pragmatic_solution::Solution,
+        elapsed_ms: u64,
     ) -> Result<LoxiSolution, String> {
         let mut tours = Vec::new();
         let mut all_stops = Vec::new();
@@ -244,7 +308,8 @@ impl VrpSolver {
             .unwrap_or_default();
 
         let cost = sol.statistic.cost;
-        let metadata = SolutionMetadata::new("vrp-rs-pragmatic", 0);
+        let mut metadata = SolutionMetadata::new("vrp-rs-pragmatic", elapsed_ms);
+        metadata.seed = Some(original_problem.seed);
 
         let mut loxi_sol = LoxiSolution::new(all_stops, cost, metadata);
         loxi_sol.tours = Some(tours);

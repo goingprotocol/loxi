@@ -19,6 +19,8 @@ type Log = {
 const DEFAULT_ORCHESTRATOR = import.meta.env.VITE_ORCHESTRATOR_URL || "ws://localhost:3005";
 const ARCHITECT_BASE = import.meta.env.VITE_ARCHITECT_URL || "http://localhost:8080";
 
+const OWNER_KEY = 'loxi_owner_id';
+
 function App() {
   const [url, setUrl] = useState(DEFAULT_ORCHESTRATOR)
   const [isConnected, setIsConnected] = useState(false)
@@ -34,6 +36,14 @@ function App() {
 
   const sdkRef = useRef<LoxiWorkerDevice | null>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
+
+  const persistedOwner = useMemo(() => {
+    const stored = localStorage.getItem(OWNER_KEY);
+    if (stored) return stored;
+    const fresh = `owner_${Math.floor(Math.random() * 10000)}`;
+    localStorage.setItem(OWNER_KEY, fresh);
+    return fresh;
+  }, []);
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -62,7 +72,7 @@ function App() {
       is_webgpu_enabled: false,
       affinity_hashes: [],
       verified_capacity: 0,
-      owner_id: `owner_${Math.floor(Math.random() * 10000)}` // Set an owner ID for notifications
+      owner_id: persistedOwner // Persisted in localStorage so it survives tab refresh
     };
     setNodeSpecs(specs);
   }, []);

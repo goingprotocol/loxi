@@ -82,32 +82,52 @@ pub async fn start_artifact_server(
         .and(rate_limit)
         .and(warp::body::json())
         .and(cache_filter.clone())
-        .map(
+        .and_then(
             move |_: (),
                   problem: crate::types::Problem,
                   cache: Arc<dashmap::DashMap<String, crate::types::Problem>>| {
-                println!("📥 API: Received Logistics Problem Submission");
-                let mission_id = uuid::Uuid::new_v4().to_string();
+                let job_tx = job_tx.clone();
+                async move {
+                    println!("📥 API: Received Logistics Problem Submission");
 
-                let job = crate::architect::LogisticsJob {
-                    id: mission_id.clone(),
-                    problem: problem.clone(),
-                };
+                    if let Err(e) = problem.validate() {
+                        return Ok::<_, warp::Rejection>(warp::reply::with_status(
+                            warp::reply::json(&serde_json::json!({
+                                "status": "error",
+                                "reason": e
+                            })),
+                            warp::http::StatusCode::BAD_REQUEST,
+                        ));
+                    }
 
-                if let Err(e) = job_tx.send(job) {
-                    eprintln!("❌ API Error: Failed to forward job to architect: {}", e);
-                    return warp::reply::json(&serde_json::json!({
-                        "status": "error",
-                        "reason": "Internal Architect Offline"
-                    }));
+                    let mission_id = uuid::Uuid::new_v4().to_string();
+
+                    let job = crate::architect::LogisticsJob {
+                        id: mission_id.clone(),
+                        problem: problem.clone(),
+                    };
+
+                    if let Err(e) = job_tx.send(job) {
+                        eprintln!("❌ API Error: Failed to forward job to architect: {}", e);
+                        return Ok(warp::reply::with_status(
+                            warp::reply::json(&serde_json::json!({
+                                "status": "error",
+                                "reason": "Internal Architect Offline"
+                            })),
+                            warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        ));
+                    }
+
+                    cache.insert(mission_id.clone(), problem);
+
+                    Ok(warp::reply::with_status(
+                        warp::reply::json(&serde_json::json!({
+                            "status": "accepted",
+                            "mission_id": mission_id
+                        })),
+                        warp::http::StatusCode::OK,
+                    ))
                 }
-
-                cache.insert(mission_id.clone(), problem);
-
-                warp::reply::json(&serde_json::json!({
-                    "status": "accepted",
-                    "mission_id": mission_id
-                }))
             },
         );
 

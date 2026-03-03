@@ -40,7 +40,9 @@ async fn main() {
 
     // 1. Initialize Internal Logistics Architect
     let shared_cache = std::sync::Arc::new(dashmap::DashMap::new());
-    let manager = LogisticsArchitect::new(&connect_addr, DOMAIN_ID, shared_cache);
+    let no_op_verify: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync> =
+        std::sync::Arc::new(|_ticket: &str| true);
+    let manager = LogisticsArchitect::new(&connect_addr, DOMAIN_ID, shared_cache, no_op_verify);
     let manager_arc = std::sync::Arc::new(std::sync::Mutex::new(manager));
 
     // 2. Register as Authority with our PUBLIC DATA ADDRESS (The Sala)

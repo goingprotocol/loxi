@@ -10,7 +10,7 @@ Client submits problem
  Logistics Architect        ← partitions problem by size
         │  RequestLease
         ▼
- Grid Orchestrator          ← auction: matches tasks to workers
+ Grid Orchestrator          ← dispatch: matches tasks to workers by affinity + hardware score
         │  LeaseAssignment
         ▼
  Browser Workers            ← WASM solvers (VRP, Matrix, Partitioner)
@@ -36,7 +36,7 @@ A problem submitted to the Architect is automatically stratified by size:
 | ≤ 100 | Partitioner worker → N VRP workers in parallel |
 | 100+  | Matrix worker → Partitioner → N VRP workers |
 
-Workers are matched by affinity (cached WASM artifact) first, then by hardware score (RAM + threads + GPU). Partition auctions are dispatched as a batch — all `RequestLease` messages are flushed to the orchestrator in a single write, so workers bid in parallel rather than sequentially. If a worker goes silent for more than 120 seconds the task is automatically re-queued. Duplicate solution submissions are silently deduplicated.
+Workers are matched by affinity (cached WASM artifact) first, then by hardware score (RAM + threads + GPU). Partition tasks are dispatched as a batch — all `RequestLease` messages are flushed to the orchestrator in a single write, so workers bid in parallel rather than sequentially. If a worker goes silent for more than 120 seconds the task is automatically re-queued. Duplicate solution submissions are silently deduplicated.
 
 ---
 
@@ -206,7 +206,7 @@ node scripts/simulate_unified_flow.js     # unified dispatch simulation
 
 **Ticket-based auth.** The orchestrator signs a short-lived RS256 JWT when it assigns a lease to a worker. The worker must present this ticket when connecting to the data plane (`/logistics/data`). Connections that arrive without a valid ticket are rejected before any payload is sent.
 
-**Auction and scheduling.** Workers bid on tasks by registering their hardware capabilities. The scheduler uses a three-tier priority match: VIP partners (node IDs listed in `LOXI_TRUSTED_PARTNERS`) get the top-scoring owned worker; then workers with the required WASM artifact already cached (affinity hit); then the highest hardware-score worker available. A binary heap ensures the best available worker is always dispatched first.
+**Scheduling.** Workers register hardware capabilities; the scheduler matches tasks to the best available worker using a three-tier priority match: VIP partners (node IDs listed in `LOXI_TRUSTED_PARTNERS`) get the top-scoring owned worker; then workers with the required WASM artifact already cached (affinity hit); then the highest hardware-score worker available. A binary heap ensures the best available worker is always dispatched first.
 
 **Fault tolerance.** Worker disconnect triggers immediate task re-queue via the recovery procedure in `handle_connection`. A 30-second watchdog independently evicts any worker silent for more than 120 seconds and re-schedules its task. Completed auctions are evicted from memory after one hour.
 
@@ -243,6 +243,30 @@ Published to npm on `sdk-v*` tag pushes via `.github/workflows/publish-sdk.yml`.
 | `ci.yml` | push to main, all PRs | `cargo fmt`, `clippy -D warnings`, `cargo test` |
 | `e2e.yml` | all PRs | Playwright smoke test: two workers → 10-stop dispatch → solution verified |
 | `publish-sdk.yml` | `sdk-v*` tag push | `npm build` + `npm publish --access public` |
+
+---
+
+## Roadmap
+
+### Near-term (in progress)
+- **Multi-vehicle fleet configuration** — define fleets with different capacities, speeds, and cost profiles in a single problem submission (`fleet` array alongside the existing `vehicle` shorthand)
+- **Reproducible solves** — wire the `seed` parameter into the VRP solver's random number generator so the same problem always returns the same routes
+- **Input validation** — reject malformed problems at submission time with structured error messages (coordinate range, time-window sanity, capacity sign)
+- **`PushSolution` ticket enforcement** — verify the RS256 ticket on the data-plane reveal path (currently only `ClaimTask` is verified)
+
+### Medium-term
+- **Address input + geocoding** — accept street addresses alongside coordinates; batch-geocode via Nominatim (OSM) before solving, with confidence scores and ambiguity flags returned in the response
+- **Webhook callbacks** — push `mission_completed` notifications to a caller-supplied URL instead of requiring polling; include per-partition progress events
+- **OpenAPI specification** — machine-readable API contract for integration with TMS/WMS systems
+- **Solution quality report** — per-vehicle utilisation %, time-window violation list, distance vs haversine lower bound, unassigned stop reasons
+- **Traffic-aware routing** — Valhalla supports time-of-day traffic tiles; expose a `departure_time` field on problems to use real congestion data instead of static OSM speeds
+- **Fleet planner dashboard** — a separate operator UI (distinct from the worker tab) for uploading stop lists, reviewing proposed routes, overriding individual assignments, and exporting to downstream systems
+
+### Long-term
+- **Distributed scale proof** — benchmark a 50k-stop problem across 50 workers on real hardware; publish the speedup curve and the point at which distribution becomes economically meaningful vs a single server
+- **WebRTC P2P payload transfer** — route problem payloads directly between workers instead of relaying through the server; the signalling infrastructure (orchestrator `Signal` relay) is already in place
+- **Real competitive auction** — collect worker bids with prices over a configurable window; assign to the lowest-cost bidder rather than the highest-hardware-score worker; foundation for a compute marketplace model
+- **On-chain settlement** — `loxi-core` is already `#![no_std]` and structured for Solana deployment; workers earn tokens for completed compute, verified by the commit-reveal hash written on-chain
 
 ---
 
