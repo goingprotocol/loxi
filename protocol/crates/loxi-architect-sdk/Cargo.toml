@@ -4,10 +4,12 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
+license.workspace = true
+description = "Client SDK for building Loxi architect nodes — connects to the orchestrator and dispatches routing tasks"
 
 [dependencies]
-loxi-core = { path = "../loxi-core" }
-loxi-types = { path = "../loxi-types" }
+loxi-core = { path = "../loxi-core", version = "0.1.0" }
+loxi-types = { path = "../loxi-types", version = "0.1.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { version = "1.0", features = ["full"] }

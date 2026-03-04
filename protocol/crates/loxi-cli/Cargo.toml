@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "Command-line interface for Loxi routing solver"
 
 [[bin]]
@@ -11,9 +12,9 @@ name = "loxi"
 path = "src/main.rs"
 
 [dependencies]
-loxi-types = { path = "../loxi-types" }
-loxi-logistics = { path = "../logistics/loxi-logistics" }
-loxi-orchestrator = { path = "../loxi-orchestrator" }
+loxi-types = { path = "../loxi-types", version = "0.1.0" }
+loxi-logistics = { path = "../logistics/loxi-logistics", version = "0.1.0" }
+loxi-orchestrator = { path = "../loxi-orchestrator", version = "0.1.0" }
 tokio = { version = "1.0", features = ["full"] }
 clap = { workspace = true }
 anyhow = { workspace = true }

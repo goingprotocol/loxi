@@ -3,6 +3,9 @@ name = "loxi-wasm-sdk"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "WASM bindings and shared utilities for Loxi browser worker nodes"
 
 [lib]
 crate-type = ["rlib"]
